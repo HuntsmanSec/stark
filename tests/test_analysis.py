@@ -83,3 +83,18 @@ def test_defang_everything():
     t = "ran powershell.exe against http://1.2.3.4:8080/p.ps1 and evil.example.com, see https://attack.mitre.org/x"
     out = defang_text(t, keep=["https://attack.mitre.org/x"])
     assert out == "ran powershell.exe against hxxp[://]1[.]2[.]3[.]4:8080/p.ps1 and evil[.]example[.]com, see https://attack.mitre.org/x"
+
+
+def test_encoded_powershell_in_plain_text_line():
+    from stark.logarranger import arrange_text
+    line = ("Nov  3 10:00:01 ws02 sysmon: powershell.exe -nop -w hidden -enc "
+            "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA")
+    rows = arrange_text(line + "\nGET hxxp://paypa1[.]com/login\n")
+    for i, r in enumerate(rows, 1):
+        r["id"] = i
+    keys = {f["key"] for f in analyze(rows)}
+    assert {"process:ps-encoded", "process:powershell-iex", "network:typosquat:paypa1.com"} <= keys
+    # a "-e" flag on something that isn't PowerShell is not decoded
+    other = arrange_text("Nov  3 10:00:01 h app: grep -e SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA file\n")
+    other[0]["id"] = 1
+    assert not [f for f in analyze(other) if f["key"] == "process:ps-encoded"]
