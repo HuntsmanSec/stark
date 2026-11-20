@@ -358,6 +358,7 @@ LOLBINS: List[Tuple[str, str, str, str, List[str], str]] = [
      "Service-based remote execution over SMB is a staple of lateral movement."),
 ]
 _LOL = [(k, re.compile(rx, re.I), t, s, m, w) for k, rx, t, s, m, w in LOLBINS]
+_PWSH = re.compile(r"\b(powershell|pwsh)(\.exe)?\b", re.I)
 _OFFICE = re.compile(r"\b(winword|excel|powerpnt|outlook|onenote|msaccess|mspub|visio)(\.exe)?\b", re.I)
 _SHELL = re.compile(r"\b(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin|msiexec|wmic)(\.exe)?\b", re.I)
 _ENC = re.compile(r"(?:^|\s)-e(?:n(?:c(?:o(?:d(?:e(?:d(?:c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?)?)?)?)?)?)?)?\s+([A-Za-z0-9+/=]{16,})", re.I)
@@ -385,7 +386,10 @@ def detect_process(rows: List[Row]) -> List[Finding]:
     for r in rows:
         cmd = str(r.get("command_line") or "")
         text = f"{r.get('process') or ''} {cmd} {r.get('message') if not cmd else ''}"
-        dec = decode_powershell(cmd) if cmd else None
+        # Plain-text logs (syslog lines, pasted snippets) have no command_line field: fall back to
+        # the message, but only when it is clearly a PowerShell invocation.
+        source = cmd or (str(r.get("message") or "") if _PWSH.search(str(r.get("message") or "")) else "")
+        dec = decode_powershell(source) if source else None
         if dec:
             decoded[r.get("id", 0)] = dec
             r["decoded_command"] = dec
