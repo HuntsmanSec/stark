@@ -11,7 +11,7 @@ DFIR timeline enrichment for Hayabusa, IRFlow Timeline and VESTIGEX.
 [![CI](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml/badge.svg)](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/HuntsmanSec/stark?sort=semver)](https://github.com/HuntsmanSec/stark/releases)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>

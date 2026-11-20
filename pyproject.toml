@@ -9,7 +9,7 @@ description = "S.T.A.R.K - Security Threat Assessment and Reputation Kit: consol
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "HuntsmanSec" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "requests>=2.28",
     "tomli>=2.0; python_version < '3.11'",
@@ -46,7 +46,7 @@ include = ["stark*"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
