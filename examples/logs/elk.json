@@ -1,0 +1,1 @@
+{"hits":{"hits":[{"_index":"logs","_source":{"@timestamp":"2026-11-01T10:03:00.000Z","ecs":{"version":"8"},"event":{"dataset":"zeek.dns","action":"query"},"source":{"ip":"10.0.0.5"},"destination":{"ip":"8.8.8.8","port":53},"dns":{"question":{"name":"update-cdn-check.xyz"}},"host":{"name":"sensor1"}}}]}}

@@ -4,9 +4,9 @@
 
 **Security Threat Assessment and Reputation Kit**
 
-One command, every reputation source. Consolidated OSINT / threat-intelligence lookups for
-IPs, domains, URLs, file hashes and email addresses, with STIX 2.1 import/export and
-DFIR timeline enrichment for Hayabusa, IRFlow Timeline and VESTIGEX.
+A case workspace and command-line toolkit for OSINT / threat-intelligence reputation lookups.
+Arrange messy SIEM, EDR, firewall and WAF logs, check indicators against 19 reputation sources,
+map MITRE ATT&CK and generate the incident report. Includes STIX 2.1 and DFIR integrations.
 
 [![CI](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml/badge.svg)](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/HuntsmanSec/stark?sort=semver)](https://github.com/HuntsmanSec/stark/releases)
@@ -17,6 +17,31 @@ DFIR timeline enrichment for Hayabusa, IRFlow Timeline and VESTIGEX.
 </div>
 
 ---
+
+## S.T.A.R.K Workspace (no command line needed)
+
+Download the binary for your OS from the [latest release](https://github.com/HuntsmanSec/stark/releases/latest)
+and double-click it (or run `stark` after installing with pip). Your browser opens the workspace.
+
+- **Accounts and team workspaces**: everyone gets a personal workspace. Create a team, share the
+  invite code, and teammates see each other's case changes live.
+- **Cases (triage)**: severity, status, TLP, assignee, notes, team discussion and an activity log,
+  with a four-step guide: *Arrange logs → Check indicators → Map ATT&CK → Write report*.
+- **Log Arranger**: drop in exports from Microsoft Sentinel, Defender, Splunk, Elastic, QRadar,
+  LogRhythm, CrowdStrike, SentinelOne, Palo Alto, Fortinet, Cisco ASA, AWS/Azure/Cloudflare WAF,
+  Zeek, Suricata, Windows event XML or any syslog/CEF/CSV/JSON. You get one clean UTC timeline
+  with extracted indicators, hosts, accounts, processes and suggested ATT&CK techniques.
+  **Logs are never stored:** they're processed in memory, live only in your browser tab, and
+  auto-purge after 30 minutes.
+- **Observables**: one-click reputation checks across every configured source, with per-source detail.
+- **MITRE ATT&CK board**: map techniques by tactic, with evidence notes.
+- **Incident report writer**: drafts the initial analysis with an executive summary, technical
+  analysis, ATT&CK mapping, recommendations, actions taken and an artifact list. Every indicator
+  is rendered as Markdown `code`. Edit with live preview, then download or print to PDF.
+- **Exports**: report, STIX 2.1, CSV, IRFlow Timeline IOC list, VESTIGEX sweep list, hash set.
+
+See [docs/workspace.md](docs/workspace.md) for team hosting, privacy details and the full list
+of supported log formats.
 
 ## Features
 
@@ -68,7 +93,8 @@ docker run --rm -e STARK_VIRUSTOTAL_API_KEY stark query 8.8.8.8
 
 ## Configure API keys
 
-You set every API key yourself. STARK never ships with keys.
+You set every API key yourself. STARK never ships with keys. In the workspace, use the
+**API keys & settings** page. On the command line:
 
 ```bash
 stark config init                 # interactive, input hidden
@@ -113,7 +139,7 @@ on macOS/Linux. It is created with `0600` permissions. See
 [`examples/config.example.toml`](examples/config.example.toml) and
 [docs/providers.md](docs/providers.md).
 
-## Usage
+## Command-line usage
 
 ### Single observable
 

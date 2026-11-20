@@ -1,0 +1,1 @@
+<13>Nov 01 10:04:00 qradar01 LEEF:2.0|IBM|QRadar|7.5|Firewall Deny|^|devTime=Nov 01 2026 10:04:00^src=203.0.113.50^dst=10.0.0.10^srcPort=51515^dstPort=3389^proto=TCP^usrName=admin^sev=7^cat=Firewall Deny

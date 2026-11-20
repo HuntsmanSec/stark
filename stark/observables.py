@@ -110,6 +110,15 @@ FILE_EXTENSIONS = frozenset(
 )
 
 
+# Dotted tokens common in log field names/values that are not real TLDs.
+PSEUDO_TLDS = frozenset(
+    """dns conn http https ssl tls log type cmdline process user users event events name_ value
+    local localdomain internal intranet lan corp home arpa domain workgroup ad dataset action
+    category code module provider kind outcome severity client server source destination
+    id uid path file hash parent pid data""".split()
+)
+
+
 def _is_hash(s: str) -> Optional[ObsType]:
     if not _HEX.match(s):
         return None
@@ -136,7 +145,7 @@ def detect_type(value: str) -> Optional[ObsType]:
         return ObsType.EMAIL
     if _DOMAIN.match(s.rstrip(".")):
         tld = s.rstrip(".").rsplit(".", 1)[-1].lower()
-        if tld in FILE_EXTENSIONS:
+        if tld in FILE_EXTENSIONS or tld in PSEUDO_TLDS:
             return None
         return ObsType.DOMAIN
     return None

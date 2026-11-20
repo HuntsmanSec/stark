@@ -98,10 +98,12 @@ class OTX(Provider):
                     families.append(n)
         gui = {"IPv4": "ip", "IPv6": "ip", "domain": "domain", "url": "url", "file": "file"}[section]
         return self.result(
-            obs, verdict, score=min(70, count * 5) if count and not whitelisted else 0,
+            obs, verdict, score=0 if whitelisted else (min(70, count * 5) if count else None),
             summary=f"{count} pulse(s)" + (f": {pulses[0].get('name')}" if pulses else "")
                     + (f" [allow-listed: {', '.join(allow)}]" if whitelisted else ""),
-            tags=[v for v in validation if v not in allow] + tags[:10], malware_families=families[:5],
+            # OTX pulse "malware_families" are free-form community labels (often pulse or author
+            # names), so they are reported as tags, never as malware families.
+            tags=[v for v in validation if v not in allow] + families[:5] + tags[:10],
             link=f"https://otx.alienvault.com/indicator/{gui}/{ident}",
             details={"pulse_count": count, "validation": validation},
         )

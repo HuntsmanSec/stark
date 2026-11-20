@@ -1,0 +1,3 @@
+<134>Nov  1 10:06:00 asa01 %ASA-4-106023: Deny tcp src outside:198.51.100.23/51000 dst inside:10.0.0.2/445 by access-group "outside_in"
+date=2026-11-01 time=10:06:10 devname="FGT60F" devid="FGT60F0000" logid="0000000013" type="traffic" subtype="forward" srcip=10.0.0.5 srcport=49999 dstip=45.77.12.9 dstport=8443 proto=6 action="deny" policyid=3 user="bob"
+CEF:0|Imperva|WAF|1.0|SQLi|SQL Injection Attempt|8|rt=Nov 01 2026 10:06:20 src=203.0.113.77 dst=10.0.0.80 request=https://shop.contoso.com/item?id=1%27%20union%20select act=blocked

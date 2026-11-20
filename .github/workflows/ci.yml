@@ -30,3 +30,4 @@ jobs:
           stark --version
           stark providers
           stark extract examples/hayabusa-sample.csv
+          python -c "from stark.web.app import create_app; create_app(':memory:')"

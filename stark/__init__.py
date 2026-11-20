@@ -10,7 +10,7 @@ Library use::
     print(report.verdict)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __title__ = "S.T.A.R.K"
 __description__ = "Security Threat Assessment and Reputation Kit"
 
