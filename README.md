@@ -33,11 +33,23 @@ and double-click it (or run `stark` after installing with pip). Your browser ope
   with extracted indicators, hosts, accounts, processes and suggested ATT&CK techniques.
   **Logs are never stored:** they're processed in memory, live only in your browser tab, and
   auto-purge after 30 minutes.
-- **Observables**: one-click reputation checks across every configured source, with per-source detail.
+- **Security finding analysis**: flags authentication anomalies (brute force, spraying, MFA
+  fatigue, impossible travel, unusual devices), PowerShell/LOLBin abuse (encoded commands are
+  decoded), malware traces, and network/C2 activity including beaconing and **typosquatted
+  domains**. Every finding explains why it fired, how confident it is and what to do.
+- **Investigate**: pivot on any host, user or IP, see related activity around an event, and look up
+  assets by IP, hostname or MAC in the logs and your asset inventory.
+- **Paste any IOC** (fanged or defanged) in the top bar for a quick reputation summary and the
+  cases it already appears in.
+- **Observables**: one-click reputation checks across every configured source. Sources that error
+  or have no data are left out, so they never clutter an investigation.
 - **MITRE ATT&CK board**: map techniques by tactic, with evidence notes.
-- **Incident report writer**: drafts the initial analysis with an executive summary, technical
-  analysis, ATT&CK mapping, recommendations, actions taken and an artifact list. Every indicator
-  is rendered as Markdown `code`. Edit with live preview, then download or print to PDF.
+- **Incident report writer**: a structured report with a **quick verdict and confidence level**,
+  executive summary, timeline, event details, analysis, interpretation, recommendations, actions
+  taken, and IOCs & artifacts. Indicators are rendered as Markdown `code` and **always defanged**
+  (`185[.]220[.]101[.]1`). Edit with live preview, then download or print to PDF.
+- **Guided setup**: right after sign-up, connect your API keys (with a one-click key test) before
+  opening the first case.
 - **Exports**: report, STIX 2.1, CSV, IRFlow Timeline IOC list, VESTIGEX sweep list, hash set.
 
 See [docs/workspace.md](docs/workspace.md) for team hosting, privacy details and the full list

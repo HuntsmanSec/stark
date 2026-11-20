@@ -143,7 +143,9 @@ def make_session(proxy: str = "", verify: bool = True) -> requests.Session:
 
     s = requests.Session()
     s.headers["User-Agent"] = USER_AGENT
-    retry = Retry(total=2, backoff_factor=1.0, status_forcelist=(500, 502, 503, 504),
+    # One quick retry for transient connection/5xx errors; never retry read timeouts, so a
+    # source that is down can't stall a whole investigation.
+    retry = Retry(total=1, connect=1, read=0, status=1, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504),
                   allowed_methods=frozenset({"GET", "POST"}))
     adapter = HTTPAdapter(max_retries=retry, pool_maxsize=32)
     s.mount("https://", adapter)

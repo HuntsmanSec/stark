@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import mimetypes
+import re
 import threading
 import time
 from collections import defaultdict
@@ -19,6 +20,7 @@ from .. import __version__
 from .. import mitre as mitre_mod
 from ..config import Config, mask
 from ..observables import ObsType, iter_lines, parse_observable
+from ..summary import filter_report
 from .db import DB, invite_code, new_token
 
 mimetypes.add_type("application/javascript", ".js")  # Windows registry sometimes maps .js to text/plain
@@ -32,6 +34,9 @@ MAX_UPLOAD_MB = 64
 SEVERITIES = ["info", "low", "medium", "high", "critical"]
 STATUSES = ["open", "in_progress", "contained", "closed"]
 TLPS = ["clear", "green", "amber", "amber+strict", "red"]
+VERDICTS = ["", "true_positive", "likely_malicious", "suspicious", "benign", "false_positive", "inconclusive"]
+CONFIDENCES = ["", "high", "medium", "low"]
+FINDING_STATUS = ["open", "confirmed", "dismissed"]
 ARTIFACT_KINDS = ["host", "user", "process", "command_line", "file", "registry", "email", "other"]
 
 
@@ -88,7 +93,7 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         g.user = None
         tok = request.cookies.get(SESSION_COOKIE)
         if tok:
-            row = db.one("SELECT u.id, u.email, u.name, u.theme FROM sessions s JOIN users u ON u.id=s.user_id "
+            row = db.one("SELECT u.id, u.email, u.name, u.theme, u.onboarded FROM sessions s JOIN users u ON u.id=s.user_id "
                          "WHERE s.token=? AND s.expires_at>?", (tok, time.time()))
             g.user = row
         # CSRF defence: state-changing API calls must carry a custom header that a
@@ -149,15 +154,17 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                    "(SELECT COUNT(*) FROM memberships mm WHERE mm.workspace_id=w.id) AS members "
                    "FROM workspaces w JOIN memberships m ON m.workspace_id=w.id WHERE m.user_id=? "
                    "ORDER BY w.kind DESC, w.name", (u["id"],))
+        for w in wss:
+            w["keys_configured"] = db.one("SELECT COUNT(*) AS n FROM workspace_keys WHERE workspace_id=?", (w["id"],))["n"]
         return {"id": u["id"], "email": u["email"], "name": u["name"], "theme": u.get("theme") or "system",
-                "workspaces": wss}
+                "onboarded": bool(u.get("onboarded")), "workspaces": wss}
 
     def start_session(user_id: int) -> Response:
         tok = new_token()
         now = time.time()
         db.x("INSERT INTO sessions VALUES (?,?,?,?)", (tok, user_id, now, now + SESSION_DAYS * 86400))
         db.x("DELETE FROM sessions WHERE expires_at<?", (now,))
-        u = db.one("SELECT id, email, name, theme FROM users WHERE id=?", (user_id,))
+        u = db.one("SELECT id, email, name, theme, onboarded FROM users WHERE id=?", (user_id,))
         resp = jsonify({"user": user_payload(u)})
         resp.set_cookie(SESSION_COOKIE, tok, max_age=SESSION_DAYS * 86400, httponly=True, samesite="Strict",
                         secure=secure_cookies, path="/")
@@ -238,6 +245,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         d = body()
         if "name" in d and d["name"].strip():
             db.x("UPDATE users SET name=? WHERE id=?", (d["name"].strip()[:80], g.user["id"]))
+        if "onboarded" in d:
+            db.x("UPDATE users SET onboarded=? WHERE id=?", (1 if d["onboarded"] else 0, g.user["id"]))
         if d.get("theme") in ("system", "light", "dark"):
             db.x("UPDATE users SET theme=? WHERE id=?", (d["theme"], g.user["id"]))
         if d.get("new_password"):
@@ -249,7 +258,7 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
             db.x("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(d["new_password"]),
                                                                   g.user["id"]))
             db.x("DELETE FROM sessions WHERE user_id=? AND token<>?", (g.user["id"], request.cookies.get(SESSION_COOKIE)))
-        u = db.one("SELECT id, email, name, theme FROM users WHERE id=?", (g.user["id"],))
+        u = db.one("SELECT id, email, name, theme, onboarded FROM users WHERE id=?", (g.user["id"],))
         return jsonify({"user": user_payload(u)})
 
     # ---------------------------------------------------------- workspaces
@@ -470,6 +479,11 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                               "u.id=a.added_by WHERE case_id=? ORDER BY done_at, id", (cid,))
         out["comments"] = db.q("SELECT c.*, u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id "
                                "WHERE case_id=? ORDER BY created_at", (cid,))
+        out["findings"] = [
+            {**f, "mitre": _j(f["mitre"]), "entities": _j(f["entities"], {}), "evidence": _j(f["evidence"]),
+             "extra": _j(f["extra"], {})}
+            for f in db.q("SELECT * FROM findings WHERE case_id=? ORDER BY CASE severity WHEN 'critical' THEN 0 "
+                          "WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, id", (cid,))]
         out["activity"] = db.q("SELECT a.*, u.name AS user_name FROM activity a LEFT JOIN users u ON u.id=a.user_id "
                                "WHERE case_id=? ORDER BY created_at DESC LIMIT 100", (cid,))
         out["members"] = db.q("SELECT u.id, u.name FROM memberships m JOIN users u ON u.id=m.user_id "
@@ -479,6 +493,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
             out["job"] = dict(jobs[cid]) if cid in jobs else None
         u = db.one("SELECT name FROM users WHERE id=?", (c.get("updated_by"),)) if c.get("updated_by") else None
         out["updated_by_name"] = u["name"] if u else None
+        from ..report import assess
+        out["assessment"] = assess(out)
         return out
 
     @app.get("/api/cases/<int:case_id>")
@@ -502,7 +518,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         c = get_case(case_id)
         d = body()
         sets, args, notes = [], [], []
-        for f, allowed in (("severity", SEVERITIES), ("status", STATUSES), ("tlp", TLPS)):
+        for f, allowed in (("severity", SEVERITIES), ("status", STATUSES), ("tlp", TLPS), ("verdict", VERDICTS),
+                           ("confidence", CONFIDENCES)):
             if f in d and d[f] in allowed and d[f] != c[f]:
                 sets.append(f"{f}=?")
                 args.append(d[f])
@@ -524,7 +541,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
             notes.append("changed the assignee")
         if "report_md" in d and isinstance(d["report_md"], str):
             sets += ["report_md=?", "report_updated_at=?"]
-            args += [d["report_md"][:1_000_000], time.time()]
+            from ..report import defang_markdown
+            args += [defang_markdown(d["report_md"][:1_000_000]), time.time()]
             notes.append("saved the report")
         if sets:
             db.x(f"UPDATE cases SET {', '.join(sets)} WHERE id=?", (*args, case_id))
@@ -625,11 +643,14 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                 reports = eng.query_many(list(obs_map), progress=progress)
                 now = time.time()
                 for rep in reports:
-                    d = rep.to_dict()
+                    # Only sources with an actual opinion are kept: errors, unsupported or
+                    # "no record" answers never reach the investigation.
+                    d = filter_report(rep.to_dict())
                     db.x("UPDATE observables SET verdict=?, score=?, flagged_by=?, families=?, tags=?, results=?, "
-                         "enriched_at=? WHERE id=?",
+                         "enriched_at=?, sources_checked=? WHERE id=?",
                          (d["verdict"], d["score"], json.dumps(d["flagged_by"]), json.dumps(d["malware_families"]),
-                          json.dumps(d["tags"][:20]), json.dumps(d["results"]), now, obs_map[rep.observable]))
+                          json.dumps(d["tags"][:20]), json.dumps(d["results"]), now, d["sources_checked"],
+                          obs_map[rep.observable]))
                 bad = sum(1 for r in reports if r.verdict.value == "malicious")
                 db.touch_case(cid, user_id)
                 db.log(ws_id, user_id, f"enriched {len(reports)} observable(s) in {c['ref']}: {bad} malicious", cid)
@@ -776,7 +797,7 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
     def gen_report(case_id):
         from ..report import generate
         c = full_case(get_case(case_id))
-        return jsonify({"markdown": generate(c, author=g.user["name"], defang=bool(body().get("defang")))})
+        return jsonify({"markdown": generate(c, author=g.user["name"])})
 
     @app.get("/api/cases/<int:case_id>/export/<fmt>")
     @login_required
@@ -844,7 +865,195 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         if not eng.providers:
             raise ApiError(400, "No reputation sources are available. Add API keys in Settings.")
         reps = eng.query_many(obs)
-        return jsonify({"results": [r.to_dict() for r in reps], "skipped": eng.skipped})
+        results = [filter_report(r.to_dict()) for r in reps]
+        for r in results:
+            r["seen_in"] = _seen_in(ws["id"], r["observable"])
+        return jsonify({"results": results})
+
+
+    # ------------------------------------------------------------ findings
+    @app.post("/api/cases/<int:case_id>/findings")
+    @login_required
+    def add_findings(case_id):
+        c = get_case(case_id)
+        now = time.time()
+        n = 0
+        for f in (body().get("items") or [])[:500]:
+            if not isinstance(f, dict) or not f.get("key") or not f.get("title"):
+                continue
+            n += db.ins(
+                "INSERT OR IGNORE INTO findings (case_id, key, category, title, severity, confidence, description, "
+                "interpretation, recommendation, mitre, entities, evidence, extra, count, first, last, added_by, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (case_id, str(f["key"])[:200], str(f.get("category") or "process")[:20], str(f["title"])[:300],
+                 f.get("severity") if f.get("severity") in SEVERITIES else "medium",
+                 f.get("confidence") if f.get("confidence") in ("high", "medium", "low") else "medium",
+                 str(f.get("description") or "")[:5000], str(f.get("interpretation") or "")[:5000],
+                 str(f.get("recommendation") or "")[:3000], json.dumps(f.get("mitre") or [])[:20000],
+                 json.dumps(f.get("entities") or {})[:20000], json.dumps((f.get("evidence") or [])[:8])[:40000],
+                 json.dumps({k: f[k] for k in ("decoded", "decoded_iocs", "countries", "impersonates", "technique",
+                                               "interval_seconds", "jitter", "tools") if k in f})[:20000],
+                 int(f.get("count") or 0), f.get("first"), f.get("last"), g.user["id"], now))
+            for t in f.get("mitre") or []:  # map the finding's techniques into the case automatically
+                tid = t.get("id") if isinstance(t, dict) else str(t)
+                if tid:
+                    tt = mitre_mod.technique(tid)
+                    db.ins("INSERT OR IGNORE INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at)"
+                           " VALUES (?,?,?,?,?,?,?)", (case_id, tt["id"], tt["name"], tt["tactic"],
+                                                       f"From finding: {str(f['title'])[:200]}", g.user["id"], now))
+        if n:
+            changed(c, f"added {n} security finding(s) to {c['ref']}")
+        return jsonify(full_case(get_case(case_id)))
+
+    @app.patch("/api/cases/<int:case_id>/findings/<int:fid>")
+    @login_required
+    def update_finding(case_id, fid):
+        c = get_case(case_id)
+        d = body()
+        if d.get("status") in FINDING_STATUS:
+            db.x("UPDATE findings SET status=? WHERE id=? AND case_id=?", (d["status"], fid, case_id))
+        if "note" in d:
+            db.x("UPDATE findings SET note=? WHERE id=? AND case_id=?", (str(d["note"])[:3000], fid, case_id))
+        if d.get("severity") in SEVERITIES:
+            db.x("UPDATE findings SET severity=? WHERE id=? AND case_id=?", (d["severity"], fid, case_id))
+        changed(c, f"updated a finding in {c['ref']}" if "status" in d else None)
+        return jsonify(full_case(get_case(case_id)))
+
+    @app.delete("/api/cases/<int:case_id>/findings/<int:rid>")
+    @login_required
+    def del_finding(case_id, rid):
+        return _child_delete("findings", case_id, rid)
+
+    # -------------------------------------------------------------- assets
+    def _norm_mac(v: str) -> str:
+        hexes = re.sub(r"[^0-9a-fA-F]", "", v or "")
+        return ":".join(hexes[i:i + 2] for i in range(0, 12, 2)).lower() if len(hexes) == 12 else (v or "").strip()
+
+    def _asset_search(ws_id: int, q: str) -> List[Dict[str, Any]]:
+        q = (q or "").strip()
+        if not q:
+            return db.q("SELECT * FROM assets WHERE workspace_id=? ORDER BY hostname LIMIT 1000", (ws_id,))
+        mac = _norm_mac(q)
+        like = f"%{q}%"
+        return db.q("SELECT * FROM assets WHERE workspace_id=? AND (hostname LIKE ? OR ip LIKE ? OR mac LIKE ? OR mac=? "
+                    "OR owner LIKE ? OR notes LIKE ?) ORDER BY hostname LIMIT 200",
+                    (ws_id, like, like, like, mac, like, like))
+
+    @app.get("/api/workspaces/<int:ws_id>/assets")
+    @login_required
+    def list_assets(ws_id):
+        membership(ws_id)
+        return jsonify(_asset_search(ws_id, request.args.get("q") or ""))
+
+    @app.post("/api/workspaces/<int:ws_id>/assets")
+    @login_required
+    def add_assets(ws_id):
+        membership(ws_id)
+        d = body()
+        items = d.get("items") or []
+        if d.get("csv"):
+            import csv as _csv
+            import io as _io
+            reader = _csv.DictReader(_io.StringIO(str(d["csv"]).lstrip("\ufeff")))
+            for row in reader:
+                low = {str(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+                items.append({
+                    "hostname": low.get("hostname") or low.get("host") or low.get("name") or low.get("computername") or low.get("device") or "",
+                    "ip": low.get("ip") or low.get("ipaddress") or low.get("ip address") or low.get("ipv4") or "",
+                    "mac": low.get("mac") or low.get("macaddress") or low.get("mac address") or "",
+                    "os": low.get("os") or low.get("operatingsystem") or low.get("operating system") or "",
+                    "owner": low.get("owner") or low.get("user") or low.get("assigned to") or low.get("primary user") or "",
+                    "department": low.get("department") or low.get("dept") or "",
+                    "location": low.get("location") or low.get("site") or "",
+                    "criticality": low.get("criticality") or low.get("tier") or "",
+                    "notes": low.get("notes") or low.get("description") or "",
+                })
+        now = time.time()
+        n = 0
+        for it in items[:20000]:
+            host = str(it.get("hostname") or "").strip()[:200]
+            ip = str(it.get("ip") or "").strip()[:100]
+            mac = _norm_mac(str(it.get("mac") or ""))[:50]
+            if not (host or ip or mac):
+                continue
+            vals = (str(it.get("os") or "")[:100], str(it.get("owner") or "")[:200], str(it.get("department") or "")[:100],
+                    str(it.get("location") or "")[:100], str(it.get("criticality") or "")[:30], str(it.get("notes") or "")[:1000])
+            existing = db.one("SELECT id FROM assets WHERE workspace_id=? AND ((hostname<>'' AND lower(hostname)=lower(?)) "
+                              "OR (mac<>'' AND mac=?))", (ws_id, host, mac))
+            if existing:
+                db.x("UPDATE assets SET hostname=COALESCE(NULLIF(?,''),hostname), ip=COALESCE(NULLIF(?,''),ip), "
+                     "mac=COALESCE(NULLIF(?,''),mac), os=COALESCE(NULLIF(?,''),os), owner=COALESCE(NULLIF(?,''),owner), "
+                     "department=COALESCE(NULLIF(?,''),department), location=COALESCE(NULLIF(?,''),location), "
+                     "criticality=COALESCE(NULLIF(?,''),criticality), notes=COALESCE(NULLIF(?,''),notes), updated_at=?, "
+                     "updated_by=? WHERE id=?", (host, ip, mac, *vals, now, g.user["id"], existing["id"]))
+            else:
+                db.x("INSERT INTO assets (workspace_id, hostname, ip, mac, os, owner, department, location, criticality, notes,"
+                     " updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (ws_id, host, ip, mac, *vals, now, g.user["id"]))
+            n += 1
+        if n:
+            db.log(ws_id, g.user["id"], f"updated {n} asset(s) in the inventory")
+        return jsonify({"saved": n, "assets": _asset_search(ws_id, "")})
+
+    @app.delete("/api/workspaces/<int:ws_id>/assets/<int:aid>")
+    @login_required
+    def delete_asset(ws_id, aid):
+        membership(ws_id)
+        db.x("DELETE FROM assets WHERE id=? AND workspace_id=?", (aid, ws_id))
+        return jsonify({"ok": True})
+
+    # -------------------------------------------------------------- search
+    def _seen_in(ws_id: int, value: str) -> List[Dict[str, Any]]:
+        return db.q("SELECT DISTINCT c.id, c.ref, c.title, c.status, c.severity, o.verdict FROM observables o JOIN cases c "
+                    "ON c.id=o.case_id WHERE c.workspace_id=? AND lower(o.value)=lower(?) ORDER BY c.updated_at DESC LIMIT 20",
+                    (ws_id, value))
+
+    @app.get("/api/workspaces/<int:ws_id>/search")
+    @login_required
+    def search(ws_id):
+        membership(ws_id)
+        q = (request.args.get("q") or "").strip()[:500]
+        if not q:
+            return jsonify({"q": q, "ioc": None, "cases": [], "hits": [], "assets": []})
+        obs = parse_observable(q)
+        like = f"%{q if not obs else obs.value}%"
+        cases = db.q("SELECT id, ref, title, status, severity, updated_at FROM cases WHERE workspace_id=? AND "
+                     "(title LIKE ? OR ref LIKE ? OR description LIKE ?) ORDER BY updated_at DESC LIMIT 20",
+                     (ws_id, f"%{q}%", f"%{q}%", f"%{q}%"))
+        hits = []
+        for table, col, kind in (("observables", "value", "indicator"), ("artifacts", "value", "artifact"),
+                                 ("events", "text", "timeline event"), ("findings", "title", "finding"),
+                                 ("actions", "text", "action")):
+            for r in db.q(f"SELECT x.{col} AS value, c.id, c.ref, c.title FROM {table} x JOIN cases c ON c.id=x.case_id "
+                          f"WHERE c.workspace_id=? AND x.{col} LIKE ? ORDER BY c.updated_at DESC LIMIT 25", (ws_id, like)):
+                hits.append({**r, "kind": kind})
+        return jsonify({"q": q, "ioc": obs.to_dict() if obs else None, "cases": cases, "hits": hits,
+                        "assets": _asset_search(ws_id, q if not obs else obs.value)[:50]})
+
+    # ---------------------------------------------------------- key tests
+    @app.post("/api/workspaces/<int:ws_id>/keys/test")
+    @login_required
+    def test_key(ws_id):
+        ws = membership(ws_id)
+        require_admin(ws)
+        from ..providers import PROVIDERS
+        from ..providers.base import make_session
+        d = body()
+        name = d.get("name")
+        value = (d.get("value") or "").strip() or (db.one("SELECT value FROM workspace_keys WHERE workspace_id=? AND name=?",
+                                                          (ws_id, name)) or {}).get("value") or Config().get_key(name or "")
+        provs = [p for p in PROVIDERS if p.config_key() == name]
+        if not provs:
+            raise ApiError(404, "Unknown source")
+        if not value and provs[0].requires_key:
+            return jsonify({"ok": False, "message": "No key entered yet"})
+        samples = {"ipv4": "8.8.8.8", "domain": "example.com", "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+                   "email": "test@example.com", "url": "https://example.com/"}
+        p = provs[0](api_key=value, session=make_session(), timeout=15, options={"rate_limit": None})
+        kind = next(k for k in ("ipv4", "domain", "sha256", "url", "email") if any(t.value == k for t in p.supported))
+        res = p.lookup(parse_observable(samples[kind]))
+        if res.verdict.value == "error":
+            return jsonify({"ok": False, "message": res.error or "Lookup failed"})
+        return jsonify({"ok": True, "message": f"Connected: test lookup of {samples[kind]} returned “{res.verdict.value}”."})
 
     @app.get("/api/mitre")
     @login_required

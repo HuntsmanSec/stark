@@ -4,6 +4,7 @@ import {
   confirmDialog,
 } from "./core.js";
 import { renderCase } from "./case.js";
+import { keysEditor, renderAssets, renderSearch, renderSetup, reputationCard } from "./intel.js";
 
 const app = document.getElementById("app");
 const LS = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { /* */ } } };
@@ -63,7 +64,7 @@ function renderAuth(mode = "login") {
           team_name: team.value, invite_code: code.value }, { noAuthRedirect: true });
       setUser(r.user);
       if (accountType === "team" || accountType === "join") { const t = r.user.workspaces.find((w) => w.kind === "team"); if (t) setWorkspace(t.id); }
-      go("/");
+      go(mode === "register" || !r.user.onboarded ? "/setup" : "/");
     } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); busy(submit, false); }
   } },
   mode === "register" ? h("div", { class: "field" }, h("label", null, "How will you use S.T.A.R.K?"), choicesEl) : null,
@@ -100,9 +101,9 @@ function renderAuth(mode = "login") {
 
 // ----------------------------------------------------------------- shell
 const NAV = [
-  ["/", "home", "Dashboard"], ["/cases", "folder", "Cases"], ["/lookup", "search", "Quick lookup"],
+  ["/", "home", "Dashboard"], ["/cases", "folder", "Cases"], ["/search", "zap", "IOC lookup & search"], ["/assets", "server", "Assets"],
 ];
-const NAV2 = [["/team", "users", "Team & workspace"], ["/settings", "key", "API keys & settings"]];
+const NAV2 = [["/team", "users", "Team & workspace"], ["/settings", "key", "API keys & settings"], ["/setup", "sparkle", "Setup guide"]];
 
 export function shell(title, crumbs, content, { actions } = {}) {
   const u = state.user; const ws = state.ws;
@@ -119,7 +120,8 @@ export function shell(title, crumbs, content, { actions } = {}) {
     h("div", { class: "nav-label" }, "Workspace"), h("nav", { class: "nav" }, NAV2.map(navLink)),
     h("div", { class: "side-foot" }, avatar(u.name), h("div", { class: "who" }, h("b", { class: "ellipsis" }, u.name), h("span", { class: "ellipsis" }, u.email)),
       h("button", { class: "btn ghost icon sm", title: "Account", onclick: (e) => userMenu(e.currentTarget) }, icon("settings"))));
-  const search = h("input", { class: "input", placeholder: "Search cases, IOCs…", onkeydown: (e) => { if (e.key === "Enter" && e.target.value.trim()) go(`/cases?q=${encodeURIComponent(e.target.value.trim())}`); } });
+  const search = h("input", { class: "input", placeholder: "Paste an IOC or search hosts, IPs, cases…", title: "Fanged or defanged IOCs get a quick reputation summary",
+    onkeydown: (e) => { if (e.key === "Enter" && e.target.value.trim()) go(`/search?q=${encodeURIComponent(e.target.value.trim())}`); } });
   mount(app, h("div", { class: "shell" }, sidebar,
     h("div", { class: "main" },
       h("header", { class: "topbar" },
@@ -180,12 +182,15 @@ export function newCaseDialog(prefill = {}) {
   const tlp = h("select", { class: "input" }, ["clear", "green", "amber", "amber+strict", "red"].map((t) => h("option", { value: t, selected: t === "amber" }, `TLP:${t.toUpperCase()}`)));
   const desc = h("textarea", { class: "input", rows: 4, placeholder: "What was reported, by whom, and what do you know so far? (optional)" });
   const submit = h("button", { class: "btn primary" }, icon("plus"), "Open case");
+  const noKeys = state.ws && !state.ws.keys_configured;
   const m = modal({ title: "Open a new case", subtitle: `In ${state.ws.name}. You can change everything later.`,
     body: h("div", { class: "form-grid" },
       h("div", { class: "field full" }, h("label", null, "Case title"), title),
       h("div", { class: "field" }, h("label", null, "Severity"), sev), h("div", { class: "field" }, h("label", null, "Type of incident"), cls),
       h("div", { class: "field" }, h("label", null, "Sharing (TLP)"), tlp, h("div", { class: "hint" }, "Controls how widely the report may be shared.")),
-      h("div", { class: "field full" }, h("label", null, "Initial notes"), desc)),
+      h("div", { class: "field full" }, h("label", null, "Initial notes"), desc),
+      noKeys ? h("div", { class: "full notice warn" }, icon("key"), h("div", { class: "small" }, h("b", null, "No intelligence sources connected yet"),
+        "Indicators can only be checked against keyless sources. ", h("a", { href: "/setup", "data-link": true, onclick: () => m.close() }, "Connect API keys first"), " (takes a minute).")) : null),
     foot: [h("button", { class: "btn", onclick: () => m.close() }, "Cancel"), submit] });
   submit.onclick = async () => {
     busy(submit, true);
@@ -211,6 +216,12 @@ async function renderDashboard() {
     mount(content,
       h("div", { class: "page-head" }, h("div", { class: "grow" }, h("h1", null, `${greet}, ${state.user.name.split(" ")[0]}`),
         h("div", { class: "sub" }, state.ws.kind === "team" ? `You're working in the ${state.ws.name} team workspace. Changes sync live with teammates.` : "Your personal workspace. Only you can see these cases."))),
+      !state.ws.keys_configured ? h("div", { class: "notice warn mb-16" }, icon("key"), h("div", { class: "grow" }, h("b", null, "Connect your threat-intelligence sources"),
+        h("span", { class: "small" }, "Add API keys for VirusTotal, AbuseIPDB, abuse.ch and others so indicators in your cases get checked automatically.")),
+        link("/setup", { class: "btn sm primary" }, "Set up now")) : null,
+      (() => { const inp = h("input", { class: "input mono", placeholder: "Paste an IOC for a quick reputation check: 185.220.101[.]1, hxxps://evil[.]com/x, a hash, an email…",
+        onkeydown: (e) => { if (e.key === "Enter" && inp.value.trim()) go(`/search?q=${encodeURIComponent(inp.value.trim())}`); } });
+        return h("div", { class: "card card-pad mb-16 row" }, icon("zap"), h("div", { class: "grow" }, inp), h("button", { class: "btn primary", onclick: () => inp.value.trim() && go(`/search?q=${encodeURIComponent(inp.value.trim())}`) }, "Check")); })(),
       h("div", { class: "grid grid-4 mb-16" },
         stat("folder", "var(--accent)", s.open, "Active cases"), stat("alert", "var(--mal)", s.urgent, "High / critical"),
         stat("bug", "var(--sus)", s.flagged_iocs, "Flagged indicators"), stat("check", "var(--ok)", s.closed, "Closed cases")),
@@ -285,7 +296,7 @@ function renderLookup() {
     busy(btn, true, "Checking…"); out.replaceChildren();
     try {
       const r = await api("POST", "/lookup", { workspace_id: state.ws.id, text: ta.value });
-      mount(out, r.results.map(resultCard));
+      mount(out, r.results.map((x) => reputationCard(x)));
     } catch (e) { fail(e); }
     busy(btn, false);
   };
@@ -353,33 +364,15 @@ async function renderSettings() {
   const content = h("div");
   shell("Settings", [h("b", null, "API keys & settings")], content);
   try {
-    const k = await api("GET", `/workspaces/${state.ws.id}/keys`);
-    const inputs = {};
-    const rows = k.keys.map((key) => {
-      const inp = h("input", { class: "input mono", type: "password", placeholder: key.set ? key.masked : (key.local_fallback ? "Using key from local config" : (key.required ? "Paste API key" : "Optional")), disabled: !k.can_edit, autocomplete: "off" });
-      inputs[key.name] = inp;
-      return h("div", { class: "list-row" },
-        h("div", { style: { width: "34%" } }, h("b", null, key.providers.join(", ")), h("div", { class: "tiny faint" }, key.description)),
-        h("div", { style: { width: "110px" } }, key.set || key.local_fallback ? h("span", { class: "pill harmless" }, h("span", { class: "dot" }), "Ready") : key.required ? h("span", { class: "pill" }, "Needs key") : h("span", { class: "pill pending" }, "Works without")),
-        h("div", { class: "grow" }, inp),
-        key.homepage ? h("a", { href: key.homepage, target: "_blank", rel: "noopener noreferrer", class: "btn ghost sm", title: "Get a key" }, icon("external")) : null,
-        k.can_edit && key.set ? h("button", { class: "btn ghost sm icon danger", title: "Remove key", onclick: async () => { await api("DELETE", `/workspaces/${state.ws.id}/keys/${key.name}`); renderSettings(); } }, icon("trash")) : null);
-    });
-    const save = h("button", { class: "btn primary" }, icon("check"), "Save keys");
-    save.onclick = async () => {
-      const keys = {}; for (const [n, i] of Object.entries(inputs)) if (i.value.trim()) keys[n] = i.value.trim();
-      if (!Object.keys(keys).length) { toast("Nothing to save. Paste a key first.", "info"); return; }
-      busy(save, true);
-      try { await api("PUT", `/workspaces/${state.ws.id}/keys`, { keys }); toast("API keys saved"); renderSettings(); } catch (e) { fail(e); busy(save, false); }
-    };
+    const ed = await keysEditor(state.ws.id, { onSaved: async () => { const r = await api("GET", "/me"); setUser(r.user); renderSettings(); } });
     const pwCur = h("input", { class: "input", type: "password", autocomplete: "current-password" });
     const pwNew = h("input", { class: "input", type: "password", autocomplete: "new-password" });
     const nameIn = h("input", { class: "input", value: state.user.name });
     mount(content,
       h("div", { class: "page-head" }, h("div", { class: "grow" }, h("h1", null, "API keys & settings"),
         h("div", { class: "sub" }, state.ws.kind === "team" ? `Keys are shared with everyone in ${state.ws.name}. Only owners and admins can change them.` : "Keys are stored in your local S.T.A.R.K database."))),
-      h("div", { class: "card mb-16" }, h("div", { class: "card-head" }, h("h3", null, "Reputation sources"), k.can_edit ? save : h("span", { class: "small muted" }, "Read-only: ask an admin to change keys")),
-        h("div", { class: "card-body" }, h("div", { class: "notice info mb-16" }, icon("lock"), h("div", { class: "small" }, "Keys are never shown again after saving, and are only sent to their own service. Sources without a key are skipped automatically.")), rows)),
+      h("div", { class: "card mb-16" }, h("div", { class: "card-head" }, h("h3", null, `Reputation sources (${ed.configured} connected)`), ed.canEdit ? ed.save : h("span", { class: "small muted" }, "Read-only: ask an admin to change keys")),
+        h("div", { class: "card-body" }, h("div", { class: "notice info mb-16" }, icon("lock"), h("div", { class: "small" }, "Keys are never shown again after saving, and are only sent to their own service. Use Test to check a key before saving.")), ed.el)),
       h("div", { class: "card", id: "account" }, h("div", { class: "card-head" }, h("h3", null, "Your account")),
         h("div", { class: "card-body form-grid" },
           h("div", { class: "field" }, h("label", null, "Display name"), nameIn),
@@ -400,8 +393,14 @@ route("/", guard(renderDashboard));
 route("/cases", guard(renderCases));
 route("/cases/:id", guard((r) => renderCase(Number(r.params.id), r.query)));
 route("/lookup", guard(renderLookup));
+route("/search", guard(renderSearch));
+route("/assets", guard(renderAssets));
+route("/setup", guard(renderSetup));
 route("/team", guard(renderTeam));
 route("/settings", guard(renderSettings));
 
 // First visit to an empty server goes straight to the setup screen.
-boot().then(() => { if (!state.user && state.meta && !state.meta.has_users && location.pathname !== "/register") go("/register", true); });
+boot().then(() => {
+  if (!state.user && state.meta && !state.meta.has_users && location.pathname !== "/register") go("/register", true);
+  else if (state.user && !state.user.onboarded && location.pathname === "/") go("/setup", true);
+});

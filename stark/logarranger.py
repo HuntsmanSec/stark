@@ -36,7 +36,7 @@ MAX_ROWS = 100_000
 
 FIELDS = ["time", "product", "event", "severity", "action", "host", "user", "src_ip", "src_port",
           "dst_ip", "dst_port", "protocol", "process", "parent_process", "command_line", "hash",
-          "url", "domain", "message"]
+          "url", "domain", "message", "country", "user_agent", "device", "mac", "logon_type", "app"]
 
 # Field aliases (lower-cased, dotted paths after flattening). First non-empty wins.
 ALIASES: Dict[str, List[str]] = {
@@ -45,7 +45,7 @@ ALIASES: Dict[str, List[str]] = {
              "generated time", "time_generated", "createdat", "created_at", "eventcreationtime", "ts",
              "datetime", "date_time", "timecreated", "timecreated.systemtime", "systemtime", "rt",
              "event.created", "eventdate", "date", "timestamp_utc", "processstarttime", "contextTimeStamp"],
-    "host": ["devicename", "computername", "computer", "host.name", "hostname", "agentname", "agent.name",
+    "host": ["devicename", "computername", "computer", "host.name", "srcname", "hostname", "agentname", "agent.name",
              "endpoint.name", "endpointname", "devname", "dvchost", "origin host", "impacted host",
              "host", "device.name", "machinename", "workstationname", "_resourceid", "observer.name",
              "src.endpoint.name", "deviceinfo.name"],
@@ -80,7 +80,7 @@ ALIASES: Dict[str, List[str]] = {
     "process": ["image", "processname", "process.name", "process.executable", "filename",
                 "initiatingprocessfilename", "src.process.name", "newprocessname", "imagefilename",
                 "process", "tgt.process.name", "process_name", "exe"],
-    "parent_process": ["parentimage", "parentprocessname", "initiatingprocessparentfilename",
+    "parent_process": ["parentimage", "parentprocessname", "initiatingprocessfilename", "initiatingprocessparentfilename",
                        "parentbasefilename", "src.process.parent.name", "process.parent.name",
                        "parent_process_name", "parentprocess"],
     "command_line": ["commandline", "command_line", "cmdline", "processcommandline",
@@ -94,6 +94,22 @@ ALIASES: Dict[str, List[str]] = {
     "domain": ["domain", "query", "queryname", "dns.question.name", "dns.rrname", "clientrequesthost",
                "httprequest.host", "dest_host", "destinationhostname", "domainname", "http.hostname",
                "server.domain", "url.domain", "tls.sni", "sni"],
+    "country": ["country", "countrycode", "country_code", "location", "location.countryorregion",
+                "locationdetails.countryorregion", "geo.country_name", "geo.country_iso_code", "source.geo.country_iso_code",
+                "client.geo.country_iso_code", "srccountry", "src_country", "httprequest.country", "clientcountry",
+                "country_name", "ipcountry", "sourcecountry", "loc.country"],
+    "user_agent": ["useragent", "user_agent", "user_agent.original", "http.user_agent", "clientrequestuseragent",
+                   "cs(user-agent)", "requestuseragent", "httprequest.headers.user-agent", "devicedetail.browser",
+                   "browser", "ua"],
+    "device": ["deviceid", "devicedetail.deviceid", "devicedetail.displayname", "devicedetail.operatingsystem",
+               "device.id", "workstation", "workstationname", "clientdevice", "devicetype", "client_name",
+               "devicedetail.os", "operatingsystem"],
+    "mac": ["mac", "macaddress", "mac_address", "src_mac", "srcmac", "client_mac", "clientmac", "host.mac",
+            "source.mac", "smac", "dhcp.mac", "physicaladdress", "macaddresses"],
+    "logon_type": ["logontype", "logon_type", "logon.type", "authenticationprotocol", "authmethod",
+                   "authenticationrequirement", "clientappused", "authentication_method"],
+    "app": ["appdisplayname", "app", "application", "applicationname", "resourcedisplayname", "service",
+            "client_app", "clientappused", "app_name"],
     "message": ["message", "msg", "_raw", "description", "details", "normal message", "alert.category",
                 "summary", "renderedmessage", "log"],
 }
@@ -140,6 +156,7 @@ _ASA_CONN = re.compile(
     r".*?(?:to|dst)\s+\S*?:(?P<dip>[\d.:a-f]+)/(?P<dport>\d+)")
 _ASA_ACT = re.compile(r"\b(Built|Teardown|Deny|Denied|denied|permitted|Permitted|dropped|Dropped)\b")
 _WIN_NS = re.compile(r"\{[^}]+\}")
+_MAC = re.compile(r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])")
 
 _SEVERITY_WORDS = {"0": "info", "1": "low", "2": "low", "3": "medium", "4": "medium", "5": "medium",
                    "6": "high", "7": "high", "8": "high", "9": "critical", "10": "critical"}
@@ -285,11 +302,24 @@ def normalise(flat: Dict[str, str], product: Optional[str] = None, raw: Optional
     if flat.get("date") and re.fullmatch(r"\d{1,2}:\d{2}:\d{2}(\.\d+)?", str(flat.get("time", ""))):
         flat = {**flat, "time": f"{flat['date']} {flat['time']}"}
     row: Dict[str, Any] = {f: _first(flat, ALIASES[f], f) if f in ALIASES else "" for f in FIELDS}
+    if flat.get("devid") and flat.get("logid"):
+        # FortiGate: "hostname" is the destination web host, the client is srcname/srcip
+        if flat.get("hostname"):
+            row["domain"] = row["domain"] or flat["hostname"]
+            row["host"] = flat.get("srcname") or ""
     row["time"] = parse_time(row["time"], default_year) or ""
     row["product"] = detect_product(flat.keys(), product)
     row["severity"] = _norm_severity(row["severity"])
     for f in ("src_ip", "dst_ip"):
         row[f] = row[f].split(",")[0].strip()
+    if row["mac"]:
+        m = _MAC.search(row["mac"])
+        row["mac"] = m.group(0).lower().replace("-", ":") if m else ""
+    elif raw:
+        m = _MAC.search(raw)
+        row["mac"] = m.group(0).lower().replace("-", ":") if m else ""
+    if row["country"] and len(row["country"]) > 60:
+        row["country"] = ""
     # Combine Cloudflare/AWS WAF host + uri into a URL
     if row["url"] and row["url"].startswith("/") and row["domain"]:
         row["url"] = f"https://{row['domain']}{row['url']}"
@@ -718,6 +748,10 @@ def arrange(sources: List[Tuple[str, str]], include_fields: bool = False) -> Dic
             v = (r.get(f) or "").strip()
             if v and v not in ("-", "SYSTEM", "N/A"):
                 counter[v[:500]] += 1
+
+    from .analysis import analyze
+    findings = analyze(rows)
+    for r in rows:
         if not include_fields:
             r.pop("fields", None)
 
@@ -747,4 +781,43 @@ def arrange(sources: List[Tuple[str, str]], include_fields: bool = False) -> Dic
             "command_lines": [{"value": v, "count": c} for v, c in cmdlines.most_common(100)],
         },
         "mitre": suggest_techniques(texts),
+        "findings": findings,
+        "assets": asset_map(rows),
     }
+
+
+def asset_map(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Correlate hostnames, IP addresses and MAC addresses seen together in the logs."""
+    from .observables import is_public_ip
+
+    assets: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        host = (r.get("host") or "").strip()
+        if not host or host in ("-", "localhost"):
+            continue
+        key = host.lower().split(".")[0]
+        a = assets.setdefault(key, {"hostname": host, "names": set(), "ips": set(), "macs": set(), "users": set(),
+                                    "products": set(), "events": 0, "first": None, "last": None})
+        a["names"].add(host)
+        a["events"] += 1
+        if r.get("product"):
+            a["products"].add(r["product"])
+        if r.get("user"):
+            a["users"].add(r["user"])
+        if r.get("mac"):
+            a["macs"].add(r["mac"])
+        ip = r.get("src_ip")
+        # Endpoint telemetry reports the host's own (internal) address as the source.
+        if ip and not is_public_ip(ip) and r.get("product") not in ("Cisco ASA / FTD", "Palo Alto Networks",
+                                                                     "IBM QRadar", "Generic"):
+            a["ips"].add(ip)
+        t = r.get("time")
+        if t:
+            a["first"] = min(a["first"] or t, t)
+            a["last"] = max(a["last"] or t, t)
+    out = []
+    for a in assets.values():
+        out.append({k: (sorted(v) if isinstance(v, set) else v) for k, v in a.items()})
+    out.sort(key=lambda a: -a["events"])
+    return out[:500]
+

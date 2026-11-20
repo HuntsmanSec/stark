@@ -88,7 +88,29 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_activity_ws ON activity(workspace_id, created_at);
+CREATE TABLE IF NOT EXISTS findings (
+  id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  key TEXT NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL, severity TEXT NOT NULL, confidence TEXT NOT NULL,
+  description TEXT DEFAULT '', interpretation TEXT DEFAULT '', recommendation TEXT DEFAULT '',
+  mitre TEXT DEFAULT '[]', entities TEXT DEFAULT '{}', evidence TEXT DEFAULT '[]', extra TEXT DEFAULT '{}',
+  count INTEGER DEFAULT 0, first TEXT, last TEXT, status TEXT DEFAULT 'open', note TEXT DEFAULT '',
+  added_by INTEGER, created_at REAL NOT NULL, UNIQUE (case_id, key)
+);
+CREATE TABLE IF NOT EXISTS assets (
+  id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  hostname TEXT DEFAULT '', ip TEXT DEFAULT '', mac TEXT DEFAULT '', os TEXT DEFAULT '', owner TEXT DEFAULT '',
+  department TEXT DEFAULT '', location TEXT DEFAULT '', criticality TEXT DEFAULT '', notes TEXT DEFAULT '',
+  updated_at REAL NOT NULL, updated_by INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_assets_ws ON assets(workspace_id);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE cases ADD COLUMN verdict TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN confidence TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0",
+    "ALTER TABLE observables ADD COLUMN sources_checked INTEGER DEFAULT 0",
+]
 
 
 def data_dir() -> Path:
@@ -108,6 +130,11 @@ class DB:
         self._local = threading.local()
         with self.connect() as con:
             con.executescript(SCHEMA)
+            for sql in MIGRATIONS:  # idempotent upgrades of databases created by older versions
+                try:
+                    con.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
         if os.name != "nt":
             try:
                 os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
