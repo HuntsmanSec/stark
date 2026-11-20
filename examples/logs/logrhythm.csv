@@ -1,0 +1,2 @@
+Log Date,Classification,Common Event,MPE Rule Name,Origin Host,Impacted Host,sip,dip,Login,Log Source Entity,Log Message
+11/01/2026 10:05:00 AM,Authentication Failure,User Logon Failure,EVID 4625 : Logon Failure,ws02,DC01,198.51.100.23,10.0.0.2,administrator,DC01,An account failed to log on. Logon Type 3

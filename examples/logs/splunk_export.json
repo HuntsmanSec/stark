@@ -1,0 +1,1 @@
+{"preview":false,"result":{"_time":"2026-11-01T10:02:00.000+00:00","host":"fw01","sourcetype":"pan:traffic","_raw":"Nov  1 10:02:00 fw01 1,2026/11/01 10:02:00,0123456789,TRAFFIC,end,2561,2026/11/01 10:02:00,10.0.0.5,45.77.12.9,0.0.0.0,0.0.0.0,allow-out,contoso\\bob,,ssl,vsys1,trust,untrust,ethernet1/1,ethernet1/2,Forward,,1234,1,49711,443,0,0,0x0,tcp,allow"}}

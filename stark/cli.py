@@ -393,6 +393,17 @@ def cmd_cache(args) -> int:
     return EXIT_OK
 
 
+def cmd_serve(args) -> int:
+    try:
+        from .web.app import serve
+    except ImportError as exc:  # pragma: no cover
+        _err(f"the workspace needs extra packages ({exc.name}). Install with: pip install 'stark-osint[web]'")
+        return EXIT_ERROR
+    serve(host=args.host, port=args.port, open_browser=not args.no_browser, allow_signup=not args.no_signup,
+          db_path=args.db, secure_cookies=args.secure_cookies)
+    return EXIT_OK
+
+
 # ------------------------------------------------------------------------ parser
 
 
@@ -464,6 +475,17 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("action", choices=["clear", "path"])
     ca.set_defaults(func=cmd_cache)
 
+    s = sub.add_parser("serve", aliases=["ui"], help="start the S.T.A.R.K workspace (web UI)",
+                       description="Start the browser workspace. Running 'stark' with no arguments does the same.")
+    s.add_argument("--host", default="127.0.0.1",
+                   help="interface to listen on (default 127.0.0.1; use 0.0.0.0 to share with a team)")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    s.add_argument("--no-signup", action="store_true", help="disable self sign-up after the first account")
+    s.add_argument("--secure-cookies", action="store_true", help="mark cookies Secure (when served over HTTPS)")
+    s.add_argument("--db", metavar="FILE", help="workspace database path (default: per-user data folder)")
+    s.set_defaults(func=cmd_serve)
+
     v = sub.add_parser("version", help="print version")
     v.set_defaults(func=lambda a: print(BANNER.format(v=__version__)) or EXIT_OK)
     return p
@@ -473,9 +495,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
+        # No command: start the workspace UI (what a double-clicked binary should do).
         print(BANNER.format(v=__version__))
-        parser.print_help()
-        return EXIT_USAGE
+        args = parser.parse_args(["serve"])
     if getattr(args, "max", None) == 0:
         args.max = None
     try:

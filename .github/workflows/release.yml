@@ -26,7 +26,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install . pyinstaller
-      - run: pyinstaller --onefile --name stark scripts/stark_entry.py
+      - shell: bash
+        run: pyinstaller --onefile --name stark --add-data "stark/web/static${{ runner.os == 'Windows' && ';' || ':' }}stark/web/static" --paths . --collect-submodules stark scripts/stark_entry.py
       - name: Rename artifact
         shell: bash
         run: |

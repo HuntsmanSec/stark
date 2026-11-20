@@ -6,6 +6,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-20
+
+### Added
+- **S.T.A.R.K Workspace**: a browser-based case workspace for analysts and non-technical users
+  (`stark serve`, or run `stark` with no arguments / double-click the binary).
+  - Individual accounts with a personal workspace, plus team workspaces with invite codes,
+    owner/admin/member roles, shared API keys and live sync of case changes between teammates.
+  - Cases (triage) with severity, status, TLP, assignee, notes, team discussion and an activity log.
+  - **Log Arranger**: normalises messy exports from Microsoft Sentinel, Microsoft Defender, Splunk,
+    Elastic/ELK, IBM QRadar (LEEF), LogRhythm, CrowdStrike Falcon, SentinelOne, Palo Alto,
+    Fortinet, Cisco ASA/FTD, AWS WAF, Cloudflare, Azure WAF, ModSecurity, Zeek, Suricata,
+    Windows Event XML and generic syslog/CEF/CSV/JSON into one sorted timeline. It extracts
+    indicators, hosts, accounts, processes and suggested MITRE ATT&CK techniques.
+    It is **ephemeral**: logs are processed in memory and never written to the database or disk,
+    and the arranged view auto-purges after 30 minutes.
+  - Observables with one-click reputation checks across all configured sources (background job
+    with progress), verdict overrides and analyst notes.
+  - Artifacts (hosts, accounts, processes, command lines, files, registry keys).
+  - MITRE ATT&CK mapping board with evidence notes.
+  - Key-event timeline and actions-taken log.
+  - **Incident report writer**: generates an initial analysis with an executive summary,
+    technical analysis, MITRE ATT&CK mapping, recommendations, actions taken and an artifact list,
+    with indicators rendered as Markdown code. Live preview, Markdown download, print/PDF.
+  - Case exports: report, STIX 2.1, CSV, IRFlow IOC list, VESTIGEX sweep list, hash set.
+  - Light/dark themes, responsive layout.
+- `stark.logarranger`, `stark.mitre` and `stark.report` library modules.
+
+### Changed
+- `flask` and `waitress` are now dependencies (the workspace server).
+- OTX: allow-list validation marks indicators harmless, a pulse count alone never escalates
+  beyond suspicious, and pulse labels are reported as tags instead of malware families.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added
@@ -24,5 +56,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Per-source rate limiting, a SQLite result cache, proxy support, `--fail-on` exit codes.
 - CI on Windows, macOS and Linux, and standalone release binaries.
 
-[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/HuntsmanSec/stark/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/HuntsmanSec/stark/releases/tag/v0.1.0

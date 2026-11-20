@@ -1,0 +1,2 @@
+{"event_simpleName":"ProcessRollup2","timestamp":"1761991210000","aid":"a1","cid":"c1","ComputerName":"WS01","UserName":"bob","FileName":"rundll32.exe","CommandLine":"rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 624 C:\\temp\\l.dmp full","SHA256HashData":"aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11"}
+{"event_simpleName":"DnsRequest","timestamp":"1761991215000","aid":"a1","cid":"c1","ComputerName":"WS01","DomainName":"update-cdn-check.xyz"}
