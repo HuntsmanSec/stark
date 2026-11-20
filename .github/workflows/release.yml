@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: stark-linux-x64
+          - os: windows-latest
+            asset: stark-windows-x64.exe
+          - os: macos-latest
+            asset: stark-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install . pyinstaller
+      - run: pyinstaller --onefile --name stark scripts/stark_entry.py
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ -f dist/stark.exe ]; then mv dist/stark.exe "dist/${{ matrix.asset }}"; else mv dist/stark "dist/${{ matrix.asset }}"; fi
+          "dist/${{ matrix.asset }}" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check tag matches package version
+        run: |
+          V=$(python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('stark/__init__.py').read()).group(1))")
+          test "v$V" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v$V"; exit 1; }
+      - run: python -m pip install build && python -m build
+      - uses: actions/download-artifact@v4
+        with:
+          path: bins
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp dist/* bins/
+          cd bins && sha256sum * > SHA256SUMS.txt
+      - name: Release notes from CHANGELOG
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          awk -v v="$V" '/^## \[/{p=($0 ~ "\\[" v "\\]")} p' CHANGELOG.md | tail -n +2 > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: S.T.A.R.K ${{ github.ref_name }}
+          body_path: notes.md
+          files: bins/*

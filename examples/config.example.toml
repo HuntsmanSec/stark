@@ -1,0 +1,35 @@
+# S.T.A.R.K configuration. Copy to:
+#   Windows:       %APPDATA%\stark\config.toml
+#   macOS / Linux: ~/.config/stark/config.toml
+# or point STARK_CONFIG at it. Prefer `stark config init` (input hidden).
+
+[keys]
+virustotal = ""
+abuseipdb = ""
+urlscan = ""
+anyrun = ""
+joesandbox = ""
+hybridanalysis = ""
+recordedfuture = ""
+otx = ""
+abusech = ""        # MalwareBazaar + ThreatFox + URLhaus
+hibp = ""
+mxtoolbox = ""
+shodan = ""
+greynoise = ""
+pulsedive = ""
+ipinfo = ""
+
+[settings]
+timeout = 20
+workers = 8
+cache_ttl = 86400
+max_age_days = 90
+verify_tls = true
+proxy = ""
+
+[providers]
+disabled = []
+
+# [providers.virustotal]
+# rate_limit = 500

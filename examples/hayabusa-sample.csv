@@ -1,0 +1,4 @@
+"Timestamp","RuleTitle","Level","Computer","Channel","EventID","RecordID","Details","ExtraFieldInfo"
+"2026-11-01 10:00:01.000 +00:00","Proc Exec","high","WS01","Sysmon",1,1001,"Cmdline: powershell -enc AAA ¦ Proc: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe ¦ Hashes: MD5=44D88612FEA8A8F36DE82E1278ABB02F,SHA256=275A021BBFB6489E54D471899F7DB9D1663FC695EC2FE2A2C4538AABF651FD0F,IMPHASH=F34D5F2D4577ED6D9CEEC516C1F5A744","ParentImage: C:\Windows\explorer.exe"
+"2026-11-01 10:00:05.000 +00:00","Net Conn","med","WS01","Sysmon",3,1002,"Proto: tcp ¦ SrcIP: 10.0.0.5 ¦ SrcPort: 49711 ¦ TgtIP: 185.220.101.1 ¦ TgtPort: 443 ¦ TgtHost: malicious-c2.example-bad.net","Image: C:\Users\bob\AppData\Local\Temp\update.exe"
+"2026-11-01 10:00:09.000 +00:00","DNS Query","info","WS01","Sysmon",22,1003,"Query: www.microsoft.com ¦ Result: 13.107.4.50","Image: C:\Program Files\Edge\msedge.exe"

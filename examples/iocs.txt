@@ -1,0 +1,5 @@
+# Example IOC list - one per line, defanged values are fine
+185.220.101[.]1
+hxxp://malicious-c2[.]example-bad[.]net/gate.php
+44d88612fea8a8f36de82e1278abb02f   # EICAR test file
+victim@example.org
