@@ -25,6 +25,22 @@ The first person to open a fresh install creates the first account.
   - API keys entered on *API keys & settings* are shared by the team. Only owners and admins can
     change them, and saved keys are never shown again.
 
+## First run: connect your sources
+
+Right after sign-up, the **setup guide** asks you to connect the threat-intelligence sources you have
+accounts for (VirusTotal, AbuseIPDB, abuse.ch, OTX, urlscan, GreyNoise, and enterprise sources such as
+Recorded Future, ANY.RUN, Joe Sandbox, Hybrid Analysis or Shodan). Each key has a **Test** button that
+runs a harmless lookup. In a team workspace the keys are shared and only owners/admins can change
+them. Sources you don't connect are skipped quietly, and sources that fail or have no data on an
+indicator are left out of results and reports entirely.
+
+## Quick reputation for a pasted IOC
+
+Paste any IOC, fanged (`http://evil.com`) or defanged (`hxxp[://]evil[.]com`, `185.220.101[.]1`),
+into the top search bar, the dashboard box or the *IOC lookup & search* page. You get a
+plain-language summary ("The IP address 185[.]220[.]101[.]1 is MALICIOUS: …"), the sources with an
+opinion, and the cases it already appears in. *Add to case* puts it into an open investigation.
+
 ## Working a case
 
 1. **Open a case**: title, severity, incident type and TLP.
@@ -36,22 +52,60 @@ The first person to open a fresh install creates the first account.
    - add extracted **indicators** (private IPs are unticked) and optionally check them straight away
    - add **hosts, accounts, processes and command lines** as artifacts
    - review and add **suggested ATT&CK techniques** (with the evidence that matched)
-3. **Observables**: check reputation across all configured sources, read per-source results, add
-   notes or override a verdict.
-4. **ATT&CK**: the attack chain, grouped by tactic, with evidence notes.
-5. **Timeline & actions**: key events and every response action you take.
-6. **Report**: *Generate draft* writes the initial analysis:
-   - Executive summary (plain language, key points for leadership)
-   - Technical analysis (timeline, indicator analysis, affected assets, ATT&CK mapping)
-   - Recommendations (containment, eradication, recovery, hardening, monitoring), drawn from the
-     indicators, assets and techniques in the case
-   - Actions taken
-   - Artifacts (IOCs, hosts, accounts, processes, command lines, files, techniques)
+   - review the **security findings**: S.T.A.R.K analyses the arranged logs for
+     - *authentication anomalies*: brute force, success after failures, password spraying, MFA
+       failures/fatigue, impossible travel, many countries, unusual devices/user agents, legacy or
+       scripted authentication, privileged logins from external IPs
+     - *process & command line*: PowerShell cradles/IEX/hidden/AMSI tampering (encoded commands are
+       decoded and shown), mshta, rundll32, regsvr32, certutil, bitsadmin, wmic, msiexec and other
+       LOLBins, Office spawning shells, credential dumping, shadow-copy deletion, log clearing,
+       persistence, recon, remote-access tools, PsExec
+     - *malware & files*: attack tooling, double extensions, masquerading names, system binaries in
+       the wrong folder, executables in user-writable paths
+     - *network & C2*: beaconing, suspicious ports, exposed RDP/SMB/SSH/WinRM, bare-IP downloads,
+       typosquatted and look-alike domains (including look-alikes of your own domain, inferred from
+       user principal names), DGA-like domains, DNS tunnelling, abused TLDs
 
-   Every indicator is rendered as Markdown code (`` `185.220.101.1` ``). Edit the Markdown on the
-   left and see the live preview on the right. Then save, copy, download `.md`, or *Print / PDF*.
-   Tick *Defang indicators* for reports that will be emailed.
-7. **Export** (top right of a case): report, STIX 2.1, CSV, IRFlow IOC list, VESTIGEX sweep list, hash set.
+     Each finding shows what was seen, an interpretation, a recommended action, severity and
+     confidence, entities, ATT&CK techniques and the evidence rows (*Show events*). *Add to case*
+     keeps it, and its techniques are mapped automatically.
+   - **investigate**: click a host, user or IP anywhere in the timeline to pivot; open a row for
+     *Related activity* (±15/60 minutes across all sources, or the same host/user); filter by time
+     range; use the **Assets** tab to look up an IP, hostname or MAC in the logs and the inventory.
+3. **Findings**: confirm or dismiss each finding and add notes. Dismissed findings drop out of
+   the verdict and the report.
+4. **Observables**: check reputation across all configured sources, read per-source results, add
+   notes or override a verdict.
+5. **ATT&CK**: the attack chain, grouped by tactic, with evidence notes.
+6. **Timeline & actions**: key events and every response action you take.
+7. **Overview → Quick verdict**: an automatic verdict (true positive, likely malicious,
+   suspicious, benign, inconclusive) and a confidence level based on how many independent kinds of
+   evidence agree. The analyst can override both.
+8. **Report**: *Generate draft* writes a structured report:
+   - **Quick verdict** with confidence level and its basis
+   - **1. Executive summary** in plain language, with key points for leadership
+   - **2. Timeline** of pinned events, findings and actions
+   - **3. Event details** for each finding: what was seen, entities, ATT&CK, evidence table, decoded commands
+   - **4. Analysis**: findings by category, indicator reputation, ATT&CK mapping
+   - **5. Interpretation**: what it means and the attack sequence
+   - **6. Confidence level**: supporting factors and the gaps that limit confidence
+   - **7. Recommendations**: containment, eradication, recovery, hardening, monitoring
+   - **8. Actions taken**
+   - **9. IOCs & artifacts**: indicators, hosts, accounts, processes, command lines, files, techniques
+
+   Every indicator is rendered as Markdown code and **always defanged** (`` `185[.]220[.]101[.]1` ``,
+   `` `hxxps[://]evil[.]com/x` ``), including inside command lines and free text. Anything pasted
+   into the editor is defanged again when saved. Edit the Markdown on the left with the live preview
+   on the right, then save, copy, download `.md`, or *Print / PDF*.
+9. **Export** (top right of a case): report, STIX 2.1, CSV, IRFlow IOC list, VESTIGEX sweep list, hash set.
+
+## Asset inventory
+
+*Assets* holds the hosts your workspace knows about: hostname, IP, MAC, OS, owner, department,
+location and criticality. Import a CSV export from your CMDB, Intune, EDR or DHCP server (download the
+template from the page; common column names are recognised), or add assets by hand. Look an asset up
+by IP, hostname or MAC in any format (`00:1A:…`, `00-1a-…`, `001a.2b3c.…`). The same lookup is
+available inside the Log Arranger and in the global search, and indicators that match an asset say so.
 
 ## Client data and privacy
 

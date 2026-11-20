@@ -24,6 +24,7 @@ _COLORS = {
     Verdict.ERROR: "\033[35m",
 }
 _RESET = "\033[0m"
+RELEVANT = (Verdict.MALICIOUS, Verdict.SUSPICIOUS, Verdict.HARMLESS)
 _BOLD = "\033[1m"
 
 
@@ -83,7 +84,8 @@ def _table(headers: Sequence[str], rows: List[Sequence[str]], color_col: Dict[in
     return "\n".join(out)
 
 
-def render_table(reports: List[ObservableReport], color: bool = False, verbose: bool = False) -> str:
+def render_table(reports: List[ObservableReport], color: bool = False, verbose: bool = False,
+                 all_sources: bool = False) -> str:
     blocks = []
     detailed = verbose or len(reports) == 1
     if detailed:
@@ -99,7 +101,13 @@ def render_table(reports: List[ObservableReport], color: bool = False, verbose: 
                 blocks.append(head + "\n  (no configured source supports this observable type)")
                 continue
             rows, verdicts = [], []
-            for r in rep.results:
+            shown = rep.results if all_sources else [r for r in rep.results if r.verdict in RELEVANT]
+            hidden = len(rep.results) - len(shown)
+            if not shown:
+                blocks.append(head + "\n  No source has data on this observable."
+                              + (f" ({hidden} source(s) checked; use --all-sources to see them)" if hidden else ""))
+                continue
+            for r in shown:
                 text = r.error and f"ERROR: {r.error}" or r.summary
                 if r.link:
                     text += f"  <{r.link}>"
@@ -107,7 +115,9 @@ def render_table(reports: List[ObservableReport], color: bool = False, verbose: 
                              "" if r.score is None else str(r.score), text])
                 verdicts.append(r.verdict)
             blocks.append(head + "\n" + _table(["Source", "Verdict", "Score", "Details"], rows,
-                                              {1: verdicts}, color))
+                                              {1: verdicts}, color)
+                          + (f"\n  ({hidden} other source(s) had no data or were unavailable; use --all-sources to show them)"
+                             if hidden else ""))
         if any(r.cached for rep in reports for r in rep.results):
             blocks.append("* = served from local cache (use --no-cache to refresh)")
         return "\n\n".join(blocks)
@@ -219,5 +229,6 @@ RENDERERS: Dict[str, Callable[..., str]] = {
 
 def render(fmt: str, reports: List[ObservableReport], color: bool = False, **kw) -> str:
     if fmt == "table":
-        return render_table(reports, color=color, verbose=kw.get("verbose", False))
+        return render_table(reports, color=color, verbose=kw.get("verbose", False),
+                            all_sources=kw.get("all_sources", False))
     return RENDERERS[fmt](reports, **kw)

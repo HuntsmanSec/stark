@@ -77,6 +77,8 @@ def _add_output_opts(p: argparse.ArgumentParser, default_fmt: str = "table") -> 
     g.add_argument("--fail-on", choices=["malicious", "suspicious"],
                    help=f"exit with code {EXIT_FLAGGED} if any observable reaches this verdict (CI/SOAR use)")
     g.add_argument("-v", "--verbose", action="store_true", help="per-source detail even for multiple observables")
+    g.add_argument("--all-sources", action="store_true",
+                   help="table: also show sources that errored or had no data (hidden by default)")
     g.add_argument("-q", "--quiet", action="store_true", help="no progress output on stderr")
     g.add_argument("--no-color", action="store_true", help="disable ANSI colours")
 
@@ -131,7 +133,7 @@ def _run_and_emit(args, observables) -> int:
 def _emit(args, reports) -> None:
     color = not args.no_color and not args.output and use_color()
     text = render(args.format, reports, color=color, include_raw=args.raw, verbose=args.verbose,
-                  all_indicators=args.stix_all, tlp=args.tlp)
+                  all_indicators=args.stix_all, tlp=args.tlp, all_sources=args.all_sources)
     if args.output:
         Path(args.output).write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
         if not args.quiet:

@@ -6,7 +6,7 @@ import { renderMarkdown } from "./md.js";
 import { renderArranger, purgeArranger } from "./arranger.js";
 
 const TABS = [
-  ["overview", "home", "Overview"], ["logs", "layers", "Log Arranger"], ["observables", "target", "Observables"],
+  ["overview", "home", "Overview"], ["logs", "layers", "Log Arranger"], ["findings", "alert", "Findings"], ["observables", "target", "Observables"],
   ["artifacts", "server", "Artifacts"], ["attack", "grid", "ATT&CK"], ["timeline", "clock", "Timeline & actions"],
   ["report", "file", "Report"], ["activity", "activity", "Activity"],
 ];
@@ -79,7 +79,7 @@ function draw() {
   drawTab();
 }
 function tabsEl(c) {
-  const counts = { observables: c.observables.length, artifacts: c.artifacts.length, attack: c.techniques.length, timeline: c.events.length + c.actions.length };
+  const counts = { findings: c.findings.filter((f) => f.status !== "dismissed").length, observables: c.observables.length, artifacts: c.artifacts.length, attack: c.techniques.length, timeline: c.events.length + c.actions.length };
   return h("div", { class: "tabs", id: "case-tabs", role: "tablist" }, TABS.map(([k, ic, label]) =>
     h("button", { class: `tab${ctx.tab === k ? " active" : ""}`, role: "tab", onclick: () => switchTab(k) }, icon(ic), label,
       counts[k] ? h("span", { class: "count" }, counts[k]) : null)));
@@ -96,7 +96,7 @@ function switchTab(k) {
   draw();
 }
 function drawTab() {
-  const fn = { overview: tabOverview, logs: tabLogs, observables: tabObservables, artifacts: tabArtifacts, attack: tabAttack,
+  const fn = { overview: tabOverview, logs: tabLogs, findings: tabFindings, observables: tabObservables, artifacts: tabArtifacts, attack: tabAttack,
     timeline: tabTimeline, report: tabReport, activity: tabActivity }[ctx.tab] || tabOverview;
   mount(ctx.body, fn(ctx.data));
 }
@@ -147,7 +147,7 @@ async function exportMenu(anchor) {
 
 function stepper(c) {
   const steps = [
-    ["logs", "Arrange logs", c.events.length ? `${c.events.length} event(s) pinned` : "Add evidence", c.events.length > 0 || c.observables.length > 0],
+    ["logs", "Analyse logs", c.findings.length ? `${c.findings.length} finding(s)` : c.events.length ? `${c.events.length} event(s) pinned` : "Add evidence", c.findings.length > 0 || c.events.length > 0 || c.observables.length > 0],
     ["observables", "Check indicators", c.observables.length ? `${c.observables.filter((o) => o.verdict !== "pending").length}/${c.observables.length} checked` : "None yet", c.observables.length > 0 && c.observables.every((o) => o.verdict !== "pending")],
     ["attack", "Map ATT&CK", c.techniques.length ? `${c.techniques.length} technique(s)` : "Not mapped", c.techniques.length > 0],
     ["report", "Write report", c.report_md ? `Saved ${timeAgo(c.report_updated_at)}` : "Not started", !!c.report_md],
@@ -173,7 +173,9 @@ function tabOverview(c) {
     h("div", { class: "col gap-16" },
       h("div", { class: "grid grid-4" },
         kpi(counts.malicious, "Malicious indicators", "var(--mal)", "observables"), kpi(counts.suspicious, "Suspicious indicators", "var(--sus)", "observables"),
-        kpi(c.artifacts.filter((a) => a.kind === "host").length, "Affected hosts", "var(--text)", "artifacts"), kpi(c.techniques.length, "ATT&CK techniques", "var(--accent)", "attack")),
+        kpi(new Set([...c.artifacts.filter((a) => a.kind === "host").map((a) => a.value.toLowerCase().split(".")[0]),
+          ...c.findings.filter((f) => f.status !== "dismissed").flatMap((f) => ((f.entities || {}).hosts || []).map((x) => x.toLowerCase().split(".")[0]))]).size,
+          "Affected hosts", "var(--text)", "findings"), kpi(c.techniques.length, "ATT&CK techniques", "var(--accent)", "attack")),
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, "Case notes"), h("span", { class: "hint" }, "Saves when you click outside")),
         h("div", { class: "card-body" }, desc,
           h("div", { class: "form-grid mt-16" },
@@ -188,6 +190,7 @@ function tabOverview(c) {
           h("div", { class: "list-row" }, ioc(o.value, o.verdict), h("span", { class: "tag" }, TYPE_LABEL[o.type]), h("span", { class: "spacer" }),
             o.families.length ? h("span", { class: "small muted ellipsis", style: { maxWidth: "220px" } }, o.families.slice(0, 2).join(", ")) : null, verdictPill(o.verdict))))) : null),
     h("div", { class: "col gap-16" },
+      verdictCard(c),
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, c.workspace.kind === "team" ? "Team discussion" : "Notes"), h("span", { class: "faint small" }, c.comments.length || "")),
         h("div", { class: "card-body col gap-12" },
           c.comments.length ? c.comments.map((m) => h("div", { class: "row top gap-12" }, avatar(m.user_name || "?"),
@@ -214,6 +217,7 @@ function tabLogs(c) {
     addObservables: async (items) => { const d = await api("POST", `/cases/${ctx.id}/observables`, { items, source: "log arranger" }); toast(`Added ${d.added} indicator(s)${d.skipped ? `, ${d.skipped} already in the case` : ""}`); ctx.data = d.case; return d; },
     addArtifacts: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/artifacts`, { items }); toast(`Added ${items.length} artifact(s)`); },
     addTechniques: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/techniques`, { items }); toast(`Mapped ${items.length} technique(s)`); },
+    addFindings: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/findings`, { items }); toast(`Added ${items.length} finding(s); their ATT&CK techniques were mapped too`); },
     addEvents: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/events`, { items }); toast(`Pinned ${items.length} event(s) to the case timeline`); },
     refreshCounts: refreshChrome,
   });
@@ -295,7 +299,8 @@ function obsDrawer(o) {
           h("div", { class: "small" }, p.error ? h("span", { style: { color: "var(--err)" } }, p.error) : p.summary,
             p.tags && p.tags.length ? h("div", { class: "row wrap gap-4 mt-8" }, p.tags.slice(0, 8).map((t) => h("span", { class: "tag" }, t))) : null,
             p.link ? h("div", null, h("a", { href: p.link, target: "_blank", rel: "noopener noreferrer", class: "tiny" }, "Open in source ↗")) : null)))))
-        : h("div", { class: "notice info" }, icon("info"), h("div", { class: "small" }, "Not checked yet. Use “Check” on the Observables tab.")),
+        : h("div", { class: "notice info" }, icon("info"), h("div", { class: "small" }, o.enriched_at ? `None of the ${o.sources_checked || ""} sources checked has a record of this indicator. Sources without data are not shown.` : "Not checked yet. Use “Check” on the Observables tab.")),
+      seenIn(o.value),
       h("div", { class: "field" }, h("label", null, "Analyst note"), note), h("div", { class: "field" }, h("label", null, "Verdict override"), override)),
     foot: [h("button", { class: "btn danger", onclick: async () => { m.close(); await call("POST", "/observables/delete", { ids: [o.id] }, "Removed"); } }, icon("trash"), "Remove"),
       h("span", { class: "spacer" }),
@@ -392,12 +397,11 @@ function tabReport(c) {
   const status = h("span", { class: "small muted" }, c.report_md ? `Saved ${timeAgo(c.report_updated_at)}` : "Not saved yet");
   const render = () => { preview.innerHTML = renderMarkdown(editor.value) || '<p class="muted">The preview appears here.</p>'; };
   editor.addEventListener("input", debounce(() => { render(); ctx.dirty = editor.value !== (ctx.data.report_md || ""); status.textContent = ctx.dirty ? "Unsaved changes" : "Saved"; }, 120));
-  const defang = h("input", { type: "checkbox" });
   const gen = h("button", { class: "btn primary" }, icon("sparkle"), c.report_md ? "Regenerate draft" : "Generate draft");
   gen.onclick = async () => {
     if (editor.value.trim() && !await confirmDialog("Replace the current text?", "A new draft will replace what's in the editor. Your saved version stays until you click Save.", { ok: "Generate", danger: false })) return;
     busy(gen, true, "Writing…");
-    try { const r = await api("POST", `/cases/${ctx.id}/report/generate`, { defang: defang.checked }); editor.value = r.markdown; render(); ctx.dirty = true; status.textContent = "Draft generated (not saved)"; toast("Draft ready. Review it, then save."); }
+    try { const r = await api("POST", `/cases/${ctx.id}/report/generate`, {}); editor.value = r.markdown; render(); ctx.dirty = true; status.textContent = "Draft generated (not saved)"; toast("Draft ready. Review it, then save."); }
     catch (e) { fail(e); }
     busy(gen, false);
   };
@@ -406,13 +410,13 @@ function tabReport(c) {
   editor.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save.click(); } });
   render();
   const checklist = [
-    ["Executive summary", true], ["Technical analysis", c.observables.length > 0 || c.events.length > 0], ["MITRE ATT&CK", c.techniques.length > 0],
-    ["Recommendations", true], ["Actions taken", c.actions.length > 0], ["Artifacts list", c.observables.length + c.artifacts.length > 0],
+    ["Quick verdict & confidence", true], ["Timeline", c.events.length + c.findings.length > 0], ["Event details & analysis", c.findings.length > 0 || c.observables.length > 0],
+    ["MITRE ATT&CK", c.techniques.length > 0], ["Recommendations", true], ["Actions taken", c.actions.length > 0], ["IOCs & artifacts", c.observables.length + c.artifacts.length > 0],
   ];
   return h("div", { class: "col gap-16" },
     h("div", { class: "card card-pad no-print" }, h("div", { class: "row wrap gap-12" },
-      h("div", { class: "grow" }, h("h3", null, "Incident report writer"), h("div", { class: "small muted" }, "Drafts the initial analysis from this case: executive summary, technical analysis, ATT&CK mapping, recommendations, actions taken and artifacts. Indicators appear as code.")),
-      h("label", { class: "check small" }, defang, "Defang indicators"), gen, save),
+      h("div", { class: "grow" }, h("h3", null, "Incident report writer"), h("div", { class: "small muted" }, "A structured report: quick verdict, executive summary, timeline, event details, analysis, interpretation, confidence level, recommendations, actions taken, and IOCs & artifacts (as code).")),
+      h("span", { class: "tag", title: "IPs, domains, URLs and emails are written as 185[.]220[.]101[.]1 / hxxps[://]… so they can't be clicked by accident" }, icon("lock"), " Indicators always defanged"), gen, save),
       h("div", { class: "row wrap gap-12 mt-16" }, checklist.map(([t, ok]) => h("span", { class: "row gap-4 small", style: { color: ok ? "var(--ok)" : "var(--text-3)" } }, icon(ok ? "check" : "info"), t, ok ? "" : " (no data yet)")))),
     h("div", { class: "report-layout" },
       h("div", { class: "card" }, h("div", { class: "card-head no-print" }, icon("edit"), h("h3", null, "Markdown"), status), h("div", { class: "card-body" }, editor)),
@@ -431,3 +435,96 @@ function tabActivity(c) {
 }
 
 export { statusPill, sevPill };
+
+// ------------------------------------------------------------- verdict card
+const VERDICT_LABELS = { true_positive: "True positive", likely_malicious: "Likely malicious", suspicious: "Suspicious", benign: "Benign",
+  false_positive: "False positive", inconclusive: "Inconclusive" };
+const VERDICT_COLOR = { true_positive: "var(--mal)", likely_malicious: "var(--high)", suspicious: "var(--sus)", benign: "var(--ok)", false_positive: "var(--ok)", inconclusive: "var(--unk)" };
+function verdictCard(c) {
+  const a = c.assessment;
+  const vSel = h("select", { class: "meta-select" }, h("option", { value: "" }, `Automatic (${VERDICT_LABELS[a.auto.verdict]})`),
+    Object.entries(VERDICT_LABELS).map(([k, l]) => h("option", { value: k, selected: c.verdict === k }, l)));
+  const cSel = h("select", { class: "meta-select" }, h("option", { value: "" }, `Automatic (${a.auto.confidence})`),
+    ["high", "medium", "low"].map((k) => h("option", { value: k, selected: c.confidence === k }, k[0].toUpperCase() + k.slice(1))));
+  vSel.onchange = () => call("PATCH", "", { verdict: vSel.value }, "Verdict updated");
+  cSel.onchange = () => call("PATCH", "", { confidence: cSel.value }, "Confidence updated");
+  const color = VERDICT_COLOR[a.verdict] || "var(--unk)";
+  return h("div", { class: "card", style: { borderTop: `3px solid ${color}` } },
+    h("div", { class: "card-head" }, icon("flag"), h("h3", null, "Quick verdict"), a.overridden ? h("span", { class: "tag" }, "set by analyst") : h("span", { class: "tag" }, "automatic")),
+    h("div", { class: "card-body" },
+      h("div", { style: { fontSize: "20px", fontWeight: 750, color } }, VERDICT_LABELS[a.verdict] || a.verdict),
+      h("div", { class: "row mt-8 mb-8" }, h("span", { class: "small muted" }, "Confidence"),
+        h("span", { class: `pill ${a.confidence === "high" ? "harmless" : a.confidence === "medium" ? "suspicious" : ""}` }, a.confidence)),
+      h("ul", { class: "small muted", style: { paddingLeft: "18px", margin: "6px 0 12px" } }, a.factors.map((f) => h("li", null, f))),
+      h("div", { class: "row wrap" }, h("span", { class: "label" }, "Override"), vSel, cSel)));
+}
+
+function seenIn(value) {
+  const box = h("div");
+  api("GET", `/workspaces/${ctx.data.workspace_id}/search?q=${encodeURIComponent(value)}`).then((s) => {
+    const others = s.hits.filter((x) => x.kind === "indicator" && x.id !== ctx.id);
+    const assets = s.assets || [];
+    mount(box,
+      others.length ? h("div", { class: "notice info" }, icon("folder"), h("div", { class: "small" }, h("b", null, `Also seen in ${others.length} other case(s)`),
+        others.map((x, i) => [i ? ", " : "", link(`/cases/${x.id}`, null, `${x.ref}: ${x.title}`)]))) : null,
+      assets.length ? h("div", { class: "notice info mt-8" }, icon("server"), h("div", { class: "small" }, h("b", null, "Matches an inventory asset"),
+        assets.slice(0, 3).map((a) => h("div", null, `${a.hostname || "?"} · ${a.ip || ""} · ${a.mac || ""}${a.owner ? ` · owner ${a.owner}` : ""}${a.criticality ? ` · ${a.criticality}` : ""}`)))) : null);
+  }).catch(() => {});
+  return box;
+}
+
+// ----------------------------------------------------------------- findings
+const CAT_LABEL = { auth: "Authentication", process: "Process & command line", malware: "Malware & files", network: "Network & C2" };
+const CAT_ICON = { auth: "user", process: "terminal", malware: "bug", network: "globe" };
+let findingFilter = "active";
+function tabFindings(c) {
+  const list = c.findings.filter((f) => findingFilter === "all" || (findingFilter === "active" ? f.status !== "dismissed" : f.status === findingFilter));
+  const chips = [["active", "Active"], ["confirmed", "Confirmed"], ["dismissed", "Dismissed"], ["all", "All"]].map(([k, l]) =>
+    h("button", { class: `chip-btn${findingFilter === k ? " on" : ""}`, onclick: () => { findingFilter = k; drawTab(); } }, l,
+      h("span", { class: "n" }, k === "all" ? c.findings.length : k === "active" ? c.findings.filter((f) => f.status !== "dismissed").length : c.findings.filter((f) => f.status === k).length)));
+  if (!c.findings.length) {
+    return h("div", { class: "card" }, empty("alert", "No security findings yet",
+      "Drop logs into the Log Arranger. S.T.A.R.K looks for authentication anomalies, suspicious processes and LOLBins, malware traces and C2 / typosquatting, then you add the relevant findings here.",
+      h("button", { class: "btn primary", onclick: () => switchTab("logs") }, icon("layers"), "Open Log Arranger")));
+  }
+  return h("div", { class: "col gap-12" }, h("div", { class: "row wrap" }, chips),
+    list.map((f) => findingCard(f)));
+}
+export function findingCard(f, { onAdd, added, onEvidence, collapsed = false } = {}) {
+  const sevColor = { critical: "var(--crit)", high: "var(--high)", medium: "var(--med)", low: "var(--low)" }[f.severity] || "var(--info)";
+  const ent = f.entities || {};
+  const entityChips = Object.entries(ent).flatMap(([k, vals]) => (vals || []).slice(0, 6).map((v) => h("span", { class: "tag", title: k }, `${k.replace(/s$/, "")}: ${v}`)));
+  const ev = f.evidence || [];
+  const body = h("div", { class: "card-body col gap-8" },
+    h("div", { class: "small" }, h("b", null, "What was seen. "), f.description),
+    f.extra && f.extra.decoded ? h("div", null, h("div", { class: "label mb-8" }, "Decoded command"), h("div", { class: "raw" }, f.extra.decoded.join("\n\n"))) : null,
+    f.decoded ? h("div", null, h("div", { class: "label mb-8" }, "Decoded command"), h("div", { class: "raw" }, f.decoded.join("\n\n"))) : null,
+    h("div", { class: "small" }, h("b", null, "Interpretation. "), f.interpretation),
+    h("div", { class: "small" }, h("b", null, "Recommended action. "), f.recommendation),
+    entityChips.length ? h("div", { class: "row wrap gap-4" }, entityChips) : null,
+    (f.mitre || []).length ? h("div", { class: "row wrap gap-4" }, f.mitre.map((m) => h("a", { class: "tag", href: m.url, target: "_blank", rel: "noopener noreferrer" }, `${m.id} ${m.name}`))) : null,
+    ev.length ? h("details", null, h("summary", { class: "small", style: { cursor: "pointer" } }, `Evidence (${f.count} event${f.count !== 1 ? "s" : ""})`),
+      h("div", { class: "table-wrap mt-8" }, h("table", { class: "table compact" }, h("thead", null, h("tr", null, ["Time", "Source", "Host / user", "Event", "Detail"].map((x) => h("th", null, x)))),
+        h("tbody", null, ev.map((e) => h("tr", null, h("td", { class: "mono tiny" }, fmtTime(e.time)), h("td", { class: "small" }, e.product),
+          h("td", { class: "small" }, [e.host, e.user].filter(Boolean).join(" / ")), h("td", { class: "small" }, e.event), h("td", { class: "small", style: { wordBreak: "break-all" } }, e.detail || e.flow))))))) : null);
+  const actions = [];
+  if (onAdd) {
+    actions.push(added ? h("span", { class: "pill harmless" }, icon("check"), "In case") : h("button", { class: "btn sm primary", onclick: (e) => onAdd(f, e.currentTarget) }, icon("plus"), "Add to case"));
+    if (onEvidence) actions.push(h("button", { class: "btn sm", onclick: () => onEvidence(f) }, icon("filter"), "Show events"));
+  } else {
+    const st = h("select", { class: "meta-select" }, [["open", "Open"], ["confirmed", "Confirmed"], ["dismissed", "Dismissed (false positive)"]].map(([k, l]) => h("option", { value: k, selected: f.status === k }, l)));
+    st.onchange = () => call("PATCH", `/findings/${f.id}`, { status: st.value }, `Finding ${st.value}`);
+    const note = h("textarea", { class: "input", rows: 2, placeholder: "Analyst note (appears in the report)" }); note.value = f.note || "";
+    note.addEventListener("change", () => call("PATCH", `/findings/${f.id}`, { note: note.value }, "Note saved"));
+    body.appendChild(note);
+    actions.push(st, h("button", { class: "btn ghost sm icon", title: "Remove", onclick: () => call("DELETE", `/findings/${f.id}`, undefined, "Finding removed") }, icon("x")));
+  }
+  if (collapsed) body.classList.add("hidden");
+  const toggle = collapsed ? h("button", { class: "btn ghost sm icon", title: "Show details", onclick: (e) => { body.classList.toggle("hidden"); e.currentTarget.replaceChildren(icon(body.classList.contains("hidden") ? "chevdown" : "x")); } }, icon("chevdown")) : null;
+  return h("div", { class: "card", style: { borderLeft: `4px solid ${sevColor}`, opacity: f.status === "dismissed" ? 0.6 : 1 } },
+    h("div", { class: "card-head" }, toggle, h("span", { style: { color: sevColor } }, icon(CAT_ICON[f.category] || "alert")),
+      h("div", { class: "grow" }, h("h3", null, f.title), h("div", { class: "tiny faint" }, `${CAT_LABEL[f.category] || f.category} · ${f.count} event(s)${f.first ? ` · ${fmtTime(f.first).slice(0, 16)}` : ""}`)),
+      h("span", { class: `pill sev-${f.severity}` }, f.severity), h("span", { class: "tag", title: "How confident the detection rule is" }, `${f.confidence} confidence`), actions),
+    body);
+}
+

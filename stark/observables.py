@@ -6,7 +6,7 @@ import ipaddress
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Iterator, List, Optional
+from typing import Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 
@@ -77,13 +77,38 @@ def refang(text: str) -> str:
     return s
 
 
-def defang(value: str) -> str:
-    """Make an IOC safe to paste into tickets/chat."""
-    s = re.sub(r"^http", "hxxp", value, flags=re.I)
-    s = s.replace("://", "[://]")
-    if "@" in s and "://" not in value:
-        s = s.replace("@", "[@]")
-    return re.sub(r"\.(?=[^.]*$)", "[.]", s)
+def defang(value: str, otype: Optional["ObsType"] = None) -> str:
+    """Make an IOC safe to paste into tickets, chat and reports.
+
+    ``185.220.101.1`` -> ``185[.]220[.]101[.]1``; ``https://evil.com/a.php`` ->
+    ``hxxps[://]evil[.]com/a.php``; ``bob@evil.com`` -> ``bob[@]evil[.]com``. Hashes are
+    returned unchanged. Already-defanged input is normalised first, so this is idempotent.
+    """
+    v = refang(value)
+    t = otype or detect_type(v)
+    if t is None or t in (ObsType.MD5, ObsType.SHA1, ObsType.SHA256):
+        return value if t is None else v
+    if t is ObsType.URL:
+        parts = urlsplit(v)
+        scheme = re.sub(r"^http", "hxxp", parts.scheme, flags=re.I)
+        scheme = re.sub(r"^ftp", "fxp", scheme, flags=re.I)
+        rest = v[len(parts.scheme) + 3:]
+        host_end = len(rest)
+        for ch in "/?#":
+            i = rest.find(ch)
+            if i != -1:
+                host_end = min(host_end, i)
+        host, tail = rest[:host_end], rest[host_end:]
+        if "@" in host:
+            cred, host = host.rsplit("@", 1)
+            host = cred + "[@]" + host
+        return f"{scheme}[://]{host.replace('.', '[.]')}{tail}"
+    if t is ObsType.EMAIL:
+        local, domain = v.rsplit("@", 1)
+        return f"{local}[@]{domain.replace('.', '[.]')}"
+    if t is ObsType.IPV6:
+        return v.replace(":", "[:]")
+    return v.replace(".", "[.]")
 
 
 # --------------------------------------------------------------------------- #
@@ -106,7 +131,8 @@ FILE_EXTENSIONS = frozenset(
     doc docx docm xls xlsx xlsm ppt pptx pptm pdf rtf one zip rar 7z gz tgz tar
     iso img vhd vhdx cab jar class py pyc sh elf so dylib bin pf lock bak old
     png jpg jpeg gif bmp ico svg mp3 mp4 avi mov htm html aspx asp php jsp cs
-    config manifest mui cat drv ocx cpl efi pdb local tlb nls ttf otf""".split()
+    config manifest mui cat drv ocx cpl efi pdb local tlb nls ttf otf dmp hiv msc ldf mdf bak1 cfg conf
+    vmdk ova key pem crt cer pfx p12 sql lck pst ost eml msg rdp vhdx wim esd job""".split()
 )
 
 
@@ -290,3 +316,64 @@ def iter_lines(lines: Iterable[str], forced: Optional[ObsType] = None) -> Iterat
         if (obs.type, obs.value) not in seen:
             seen.add((obs.type, obs.value))
             yield obs
+
+
+def find_iocs(text: str, include_private: bool = True) -> List[Tuple[int, int, Observable]]:
+    """Return non-overlapping (start, end, observable) spans for every IOC in ``text``.
+
+    Unlike :func:`extract` this keeps positions, so callers can rewrite the text
+    (for example to defang it) without touching anything else."""
+    spans: List[Tuple[int, int, Observable]] = []
+
+    def taken(a: int, b: int) -> bool:
+        return any(a < e and b > s0 for s0, e, _ in spans)
+
+    def add(m_start: int, raw: str, forced: Optional[ObsType] = None, want: Optional[ObsType] = None):
+        end = m_start + len(raw)
+        if taken(m_start, end):
+            return
+        o = parse_observable(raw, forced=forced)
+        if o is None or (want and o.type is not want):
+            return
+        if o.type.is_ip and not include_private and not is_public_ip(o.value):
+            return
+        spans.append((m_start, end, o))
+
+    for m in _X_URL.finditer(text):
+        url = m.group(0)
+        while url and url[-1] in ".,)]}'\"" and url.count(url[-1]) > url.count({")": "(", "]": "[", "}": "{"}.get(url[-1], "\0")):
+            url = url[:-1]
+        add(m.start(), url, ObsType.URL)
+    for m in _X_EMAIL.finditer(text):
+        add(m.start(), m.group(0))
+    for m in _X_HASH.finditer(text):
+        add(m.start(), m.group(0))
+    for m in _X_IPV4.finditer(text):
+        add(m.start(), m.group(0), ObsType.IPV4)
+    for m in _X_IPV6.finditer(text):
+        if m.group(0).count(":") >= 2 and len(m.group(0)) >= 6:
+            add(m.start(), m.group(0), want=ObsType.IPV6)
+    for m in _X_DOMAIN.finditer(text):
+        add(m.start(), m.group(0), want=ObsType.DOMAIN)
+    spans.sort(key=lambda x: x[0])
+    return spans
+
+
+def defang_text(text: str, keep: Iterable[str] = ()) -> str:
+    """Defang every IP, domain, URL and email address inside free text.
+
+    Values listed in ``keep`` (for example reference links) are left untouched."""
+    if not text:
+        return text
+    keep = set(keep)
+    out, last = [], 0
+    for start, end, o in find_iocs(text):
+        raw = text[start:end]
+        if raw in keep or o.type.is_hash:
+            continue
+        out.append(text[last:start])
+        out.append(defang(raw, o.type))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+

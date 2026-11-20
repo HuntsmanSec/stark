@@ -1,0 +1,7 @@
+{"ts": 1793670000.0, "uid": "C0", "id.orig_h": "10.0.0.22", "id.orig_p": 53000, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "paypa1.com", "qtype_name": "A"}
+{"ts": 1793670001.0, "uid": "C1", "id.orig_h": "10.0.0.22", "id.orig_p": 53001, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "contoso-hr-portal.com", "qtype_name": "A"}
+{"ts": 1793670002.0, "uid": "C2", "id.orig_h": "10.0.0.22", "id.orig_p": 53002, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "xk2v9qz7wmb4lq8p.net", "qtype_name": "A"}
+{"ts": 1793670003.0, "uid": "C3", "id.orig_h": "10.0.0.22", "id.orig_p": 53003, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "aGVsbG8gd29ybGQgdGhpcyBpcyBleGZpbHRyYXRlZA.c2-dns-exfil.top", "qtype_name": "A"}
+{"ts": 1793670004.0, "uid": "C4", "id.orig_h": "10.0.0.22", "id.orig_p": 53004, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "d2hhdCBhIGdyZWF0IGRheSB0byBleGZpbHRyYXRl.c2-dns-exfil.top", "qtype_name": "A"}
+{"ts": 1793670005.0, "uid": "C5", "id.orig_h": "10.0.0.22", "id.orig_p": 53005, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "github.com", "qtype_name": "A"}
+{"ts": 1793670006.0, "uid": "C6", "id.orig_h": "10.0.0.22", "id.orig_p": 53006, "id.resp_h": "10.0.0.2", "id.resp_p": 53, "proto": "udp", "query": "login.microsoftonline.com", "qtype_name": "A"}

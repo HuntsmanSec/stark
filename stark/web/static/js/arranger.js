@@ -1,6 +1,7 @@
 // Log Arranger UI. Results live ONLY in this module's memory (never localStorage,
 // never the server DB) and are wiped on purge, on leaving the case, or after 30 minutes.
-import { api, busy, download, empty, fail, fmtTime, h, icon, ioc, mount, toast, TYPE_LABEL, debounce } from "./core.js";
+import { api, busy, download, empty, fail, fmtTime, h, icon, ioc, mount, state, toast, TYPE_LABEL, debounce } from "./core.js";
+import { findingCard } from "./case.js";
 
 const TTL_MS = 30 * 60 * 1000;
 const PAGE = 300;
@@ -67,7 +68,8 @@ function inputView(caseData, redraw) {
       const result = await api("POST", "/arrange", fd);
       paste.value = "";
       store = { caseId: caseData.id, result, names: files.map((f) => f.name).concat(fd.has("text") ? ["pasted text"] : []), at: Date.now(),
-        filters: { q: "", product: null, severity: null, withIoc: false }, selected: new Set(), sideTab: "iocs", limit: PAGE };
+        filters: { q: "", product: null, severity: null, withIoc: false, pivot: null, ids: null, idsLabel: "", from: "", to: "" },
+        selected: new Set(), sideTab: "iocs", limit: PAGE, addedFindings: new Set() };
       files.length = 0;
       redraw();
     } catch (e) { fail(e); busy(go, false); }
@@ -78,10 +80,20 @@ function inputView(caseData, redraw) {
 }
 
 // ---------------------------------------------------------------- results
+const PIVOT_FIELDS = { host: ["host"], user: ["user"], ip: ["src_ip", "dst_ip"], mac: ["mac"], domain: ["domain"] };
+function pivotMatch(r, p) {
+  if (!p) return true;
+  const v = String(p.value).toLowerCase();
+  return PIVOT_FIELDS[p.field].some((f) => r[f] && String(r[f]).toLowerCase() === v)
+    || (p.field === "host" && r.host && r.host.toLowerCase().split(".")[0] === v.split(".")[0])
+    || (p.field === "user" && r.user && r.user.toLowerCase().replace(/^.*\\/, "").replace(/@.*$/, "") === v.replace(/^.*\\/, "").replace(/@.*$/, ""));
+}
 function filtered() {
-  const { q, product, severity, withIoc } = store.filters;
+  const { q, product, severity, withIoc, pivot, ids, from, to } = store.filters;
   const needle = q.trim().toLowerCase();
+  const f0 = from ? from.replace(" ", "T") : ""; const t0 = to ? to.replace(" ", "T") : "";
   return store.result.rows.filter((r) => (!product || r.product === product) && (!severity || r.severity === severity) && (!withIoc || r.iocs.length)
+    && (!ids || ids.has(r.id)) && pivotMatch(r, pivot) && (!f0 || (r.time && r.time >= f0)) && (!t0 || (r.time && r.time <= t0 + "~"))
     && (!needle || [r.event, r.host, r.user, r.src_ip, r.dst_ip, r.command_line, r.url, r.domain, r.message, r.process, r.action, r.raw].some((v) => v && String(v).toLowerCase().includes(needle))));
 }
 
@@ -105,6 +117,27 @@ function resultsView(caseData, actions, redraw) {
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     download(`arranged-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.csv`, [cols.join(","), ...filtered().map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n"), "text/csv");
   } }, icon("download"), "Export CSV");
+  const activeChips = () => {
+    const f = store.filters; const chips = [];
+    const chip = (label, clear) => h("span", { class: "chip-btn on" }, label, h("button", { class: "btn ghost sm icon", style: { width: "18px", height: "18px" }, onclick: () => { clear(); store.limit = PAGE; redraw(); } }, icon("x")));
+    if (f.pivot) chips.push(chip(`${f.pivot.field} = ${f.pivot.value}`, () => { f.pivot = null; }));
+    if (f.ids) chips.push(chip(`evidence: ${f.idsLabel}`, () => { f.ids = null; f.idsLabel = ""; }));
+    if (f.from || f.to) chips.push(chip(`time ${f.from ? fmtTime(f.from).slice(0, 16) : "…"} → ${f.to ? fmtTime(f.to).slice(0, 16) : "…"}`, () => { f.from = ""; f.to = ""; }));
+    return chips.length ? h("div", { class: "arr-toolbar", style: { paddingTop: "6px", paddingBottom: "6px" } }, h("span", { class: "label" }, "Investigating"), chips,
+      h("button", { class: "link-btn small", onclick: () => { Object.assign(store.filters, { pivot: null, ids: null, idsLabel: "", from: "", to: "" }); redraw(); } }, "Clear all")) : null;
+  };
+  const fromIn = h("input", { class: "input mono", style: { width: "175px", height: "28px" }, placeholder: "from 2026-11-01 09:00", value: store.filters.from ? fmtTime(store.filters.from).slice(0, 16) : "" });
+  const toIn = h("input", { class: "input mono", style: { width: "175px", height: "28px" }, placeholder: "to 2026-11-01 11:00", value: store.filters.to ? fmtTime(store.filters.to).slice(0, 16) : "" });
+  const applyTime = () => { store.filters.from = fromIn.value.trim(); store.filters.to = toIn.value.trim(); store.limit = PAGE; redraw(); };
+  [fromIn, toIn].forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") applyTime(); }));
+  store.pivotTo = (field, value) => { store.filters.pivot = { field, value }; store.filters.ids = null; store.limit = PAGE; redraw(); };
+  store.windowAround = (r, minutes, field) => {
+    const t = Date.parse(r.time); if (!t) return;
+    const iso = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "");
+    store.filters.from = iso(t - minutes * 60000); store.filters.to = iso(t + minutes * 60000);
+    store.filters.pivot = field && r[field] ? { field: field === "src_ip" ? "ip" : field, value: r[field] } : null;
+    store.filters.ids = null; store.limit = PAGE; redraw();
+  };
   drawTable();
   return h("div", { class: "col gap-16" },
     h("div", { class: "grid grid-4" },
@@ -112,9 +145,11 @@ function resultsView(caseData, actions, redraw) {
       statBox(Object.keys(st.products).length, "log sources detected", Object.keys(st.products).slice(0, 2).join(", ")),
       statBox(res.iocs.filter((i) => !i.internal).length, "external indicators", `${res.iocs.filter((i) => i.internal).length} internal`),
       statBox(res.mitre.length, "ATT&CK suggestions", st.first ? `${fmtTime(st.first).slice(0, 16)} → ${fmtTime(st.last).slice(0, 16)}` : "no timestamps")),
+    findingsPanel(res.findings || [], actions, redraw),
     h("div", { class: "arr-layout" },
       h("div", { class: "card" },
-        h("div", { class: "arr-toolbar" }, search, iocToggle, h("span", { class: "spacer" }), pin, exportCsv,
+        activeChips(),
+        h("div", { class: "arr-toolbar" }, search, iocToggle, h("span", { class: "row gap-4" }, icon("clock"), fromIn, toIn, h("button", { class: "btn sm", onclick: applyTime }, "Apply")), h("span", { class: "spacer" }), pin, exportCsv,
           h("button", { class: "btn sm ghost", onclick: () => { purgeArranger(); redraw(); } }, icon("plus"), "New batch")),
         h("div", { class: "arr-toolbar", style: { paddingTop: "8px", paddingBottom: "8px" } }, h("span", { class: "label" }, "Sources"), productChips,
           sevChips.length ? [h("span", { class: "label", style: { marginLeft: "8px" } }, "Severity"), sevChips] : null),
@@ -162,19 +197,26 @@ function timelineTable(actions, redrawTable) {
       h("td", { class: "time" }, r.time ? fmtTime(r.time) : h("span", { class: "faint" }, "no time")),
       h("td", null, h("span", { class: "row gap-4" }, r.severity ? h("span", { class: `sev-dot ${r.severity}`, title: r.severity }) : null, h("span", { class: "small" }, r.product))),
       h("td", { class: "small", style: { maxWidth: "180px" } }, h("div", { class: "ellipsis", title: r.event }, r.event || h("span", { class: "faint" }, "-"))),
-      h("td", { class: "small" }, r.host ? h("div", null, r.host) : null, r.user ? h("div", { class: "faint" }, r.user) : null),
-      h("td", { class: "flow" }, r.src_ip || r.dst_ip ? [r.src_ip || "?", r.src_port ? `:${r.src_port}` : "", " → ", r.dst_ip || "?", r.dst_port ? `:${r.dst_port}` : ""].join("") : ""),
+      h("td", { class: "small" }, r.host ? h("div", null, pivotLink("host", r.host)) : null, r.user ? h("div", { class: "faint" }, pivotLink("user", r.user)) : null),
+      h("td", { class: "flow" }, r.src_ip || r.dst_ip ? [r.src_ip ? pivotLink("ip", r.src_ip) : "?", r.src_port ? `:${r.src_port}` : "", " → ", r.dst_ip ? pivotLink("ip", r.dst_ip) : "?", r.dst_port ? `:${r.dst_port}` : ""] : ""),
       h("td", { class: "small" }, r.action),
       h("td", { class: "detail" }, h("div", { class: "ellipsis" }, highlight(r.command_line || r.url || r.domain || r.message || r.process || "", r.iocs))));
     tr.addEventListener("click", () => {
       const next = tr.nextSibling;
       if (next && next.classList && next.classList.contains("raw-row")) { next.remove(); tr.classList.remove("expanded"); return; }
       tr.classList.add("expanded");
-      const fields = ["time", "product", "event", "severity", "action", "host", "user", "src_ip", "src_port", "dst_ip", "dst_port", "protocol", "process", "parent_process", "command_line", "hash", "url", "domain", "source_file"]
+      const fields = ["time", "product", "event", "severity", "action", "host", "user", "src_ip", "src_port", "dst_ip", "dst_port", "protocol", "process", "parent_process", "command_line", "hash", "url", "domain", "country", "user_agent", "device", "mac", "logon_type", "app", "source_file"]
         .filter((f) => r[f]).map((f) => h("div", { class: "row top", style: { gap: "10px" } }, h("span", { class: "label", style: { width: "110px", flex: "none" } }, f.replace("_", " ")), h("div", { class: "grow small", style: { wordBreak: "break-all" } }, highlight(String(r[f]), r.iocs))));
       tr.after(h("tr", { class: "raw-row" }, h("td", { colspan: 8, style: { background: "var(--bg-sunk)" } },
-        h("div", { class: "grid grid-2" }, h("div", { class: "col gap-4" }, fields), h("div", null, h("div", { class: "label mb-8" }, "Original line"), h("div", { class: "raw" }, r.raw))),
-        h("div", { class: "row mt-8" }, h("span", { class: "spacer" }), h("button", { class: "btn sm", onclick: async () => { try { await actions.addEvents([{ time: r.time, text: summarise(r) }]); actions.refreshCounts(); } catch (e) { fail(e); } } }, icon("pin"), "Pin to case timeline")))));
+        h("div", { class: "grid grid-2" }, h("div", { class: "col gap-4" }, fields), h("div", null, h("div", { class: "label mb-8" }, "Original line"), h("div", { class: "raw" }, r.raw),
+          r.decoded_command ? h("div", { class: "mt-8" }, h("div", { class: "label mb-8" }, "Decoded PowerShell"), h("div", { class: "raw" }, r.decoded_command)) : null)),
+        h("div", { class: "row wrap mt-8" }, h("span", { class: "label" }, "Related activity"),
+          r.time ? [15, 60].map((m) => h("button", { class: "btn sm", onclick: () => store.windowAround(r, m) }, `All sources ±${m} min`)) : null,
+          r.time && r.host ? h("button", { class: "btn sm", onclick: () => store.windowAround(r, 60, "host") }, `${r.host} ±1 h`) : null,
+          r.time && r.user ? h("button", { class: "btn sm", onclick: () => store.windowAround(r, 60, "user") }, `${r.user} ±1 h`) : null,
+          r.host ? h("button", { class: "btn sm", onclick: () => store.pivotTo("host", r.host) }, "Everything on this host") : null,
+          r.user ? h("button", { class: "btn sm", onclick: () => store.pivotTo("user", r.user) }, "Everything by this user") : null,
+          h("span", { class: "spacer" }), h("button", { class: "btn sm primary", onclick: async () => { try { await actions.addEvents([{ time: r.time, text: summarise(r) }]); actions.refreshCounts(); } catch (e) { fail(e); } } }, icon("pin"), "Pin to case timeline")))));
     });
     tbody.appendChild(tr);
   }
@@ -190,11 +232,12 @@ function timelineTable(actions, redrawTable) {
 // ------------------------------------------------------------- side panel
 function sidePanel(actions, redraw) {
   const res = store.result;
-  const tabs = [["iocs", "Indicators", res.iocs.length], ["entities", "Entities", res.entities.hosts.length + res.entities.users.length + res.entities.processes.length], ["mitre", "ATT&CK", res.mitre.length]];
+  const tabs = [["iocs", "Indicators", res.iocs.length], ["entities", "Entities", res.entities.hosts.length + res.entities.users.length + res.entities.processes.length], ["assets", "Assets", (res.assets || []).length], ["mitre", "ATT&CK", res.mitre.length]];
   const body = h("div", { class: "card-body" });
   const head = h("div", { class: "tabs", style: { margin: 0, padding: "0 10px" } }, tabs.map(([k, l, n]) => h("button", { class: `tab${store.sideTab === k ? " active" : ""}`, onclick: () => { store.sideTab = k; redraw(); } }, l, h("span", { class: "count" }, n))));
   if (store.sideTab === "iocs") mount(body, iocPanel(actions));
   else if (store.sideTab === "entities") mount(body, entityPanel(actions));
+  else if (store.sideTab === "assets") mount(body, assetPanel(actions));
   else mount(body, mitrePanel(actions));
   return h("div", { class: "card", style: { position: "sticky", top: "0" } }, head, body);
 }
@@ -257,3 +300,74 @@ function mitrePanel(actions) {
       } }, icon("plus"), "Add to case"))))),
     h("button", { class: "btn sm", onclick: async () => { try { await actions.addTechniques(list.map((t) => ({ technique_id: t.id, note: `Seen ${t.count}× in logs, e.g.: ${t.evidence[0] || ""}`.slice(0, 1900) }))); actions.refreshCounts(); } catch (e) { fail(e); } } }, "Add all suggestions"));
 }
+
+function pivotLink(field, value) {
+  return h("a", { href: "#", title: `Show all activity for this ${field}`, onclick: (e) => { e.preventDefault(); e.stopPropagation(); store.pivotTo(field, value); } }, value);
+}
+
+// ------------------------------------------------------------ findings panel
+const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+function findingsPanel(findings, actions, redraw) {
+  if (!findings.length) {
+    return h("div", { class: "notice info" }, icon("check"), h("div", { class: "small" }, h("b", null, "No security findings in these logs"),
+      "No authentication anomalies, suspicious process/LOLBin activity, malware traces or C2 / typosquatting patterns were detected. Review the timeline and indicators manually."));
+  }
+  const counts = {}; findings.forEach((f) => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+  const add = async (list, btn) => {
+    if (btn) busy(btn, true);
+    try { await actions.addFindings(list); list.forEach((f) => store.addedFindings.add(f.key)); actions.refreshCounts(); redraw(); }
+    catch (e) { fail(e); if (btn) busy(btn, false); }
+  };
+  let open = store.findingsOpen ?? true;
+  const listEl = h("div", { class: "col gap-8 mt-16" });
+  const drawList = () => mount(listEl, open ? findings.map((f) => findingCard(f, { added: store.addedFindings.has(f.key), collapsed: true,
+    onAdd: (ff, btn) => add([ff], btn),
+    onEvidence: (ff) => { store.filters.ids = new Set(ff.evidence_ids); store.filters.idsLabel = ff.title.slice(0, 50); store.filters.pivot = null; store.limit = PAGE; redraw();
+      setTimeout(() => { const t = document.querySelector(".arr-table"); t && t.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50); } })) : []);
+  drawList();
+  const serious = findings.filter((f) => SEV_ORDER[f.severity] <= 1 && !store.addedFindings.has(f.key));
+  return h("div", { class: "card card-pad" },
+    h("div", { class: "row wrap" }, icon("alert"), h("h3", null, `Security findings (${findings.length})`),
+      ["critical", "high", "medium", "low"].filter((k) => counts[k]).map((k) => h("span", { class: `pill sev-${k}` }, `${counts[k]} ${k}`)),
+      h("span", { class: "spacer" }),
+      serious.length ? h("button", { class: "btn sm primary", onclick: (e) => add(serious, e.currentTarget) }, icon("plus"), `Add ${serious.length} critical/high to case`) : null,
+      h("button", { class: "btn sm", onclick: (e) => add(findings.filter((f) => !store.addedFindings.has(f.key)), e.currentTarget) }, "Add all"),
+      h("button", { class: "btn sm ghost", onclick: () => { open = !open; store.findingsOpen = open; drawList(); } }, open ? "Collapse" : "Expand")),
+    h("div", { class: "hint mt-8" }, "Automatic analysis of authentication, process/command-line, malware/file and network/C2 activity. Each finding explains why it fired. Add the relevant ones to the case and they feed the report."),
+    listEl);
+}
+
+// ------------------------------------------------------------- asset lookup
+function assetPanel(actions) {
+  const assets = store.result.assets || [];
+  const q = h("input", { class: "input mono", placeholder: "IP, hostname or MAC" });
+  const out = h("div", { class: "col gap-8 mt-8" });
+  const norm = (v) => String(v || "").toLowerCase().replace(/[-.]/g, ":");
+  const run = async () => {
+    const v = q.value.trim().toLowerCase();
+    const fromLogs = !v ? assets.slice(0, 30) : assets.filter((a) => a.names.some((n) => n.toLowerCase().includes(v)) || a.ips.includes(v)
+      || a.macs.some((m) => norm(m) === norm(v) || m.includes(v)) || (a.hostname || "").toLowerCase().includes(v));
+    const rowsWithIp = v ? store.result.rows.filter((r) => r.src_ip === v || r.dst_ip === v).length : 0;
+    let inv = [];
+    if (v) { try { inv = await api("GET", `/workspaces/${state.ws.id}/assets?q=${encodeURIComponent(v)}`); } catch { /* ignore */ } }
+    mount(out,
+      inv.length ? h("div", null, h("div", { class: "label mb-8" }, "Asset inventory"), inv.slice(0, 5).map((a) => h("div", { class: "result-card small" },
+        h("b", null, a.hostname || "(no hostname)"), h("div", { class: "mono tiny" }, [a.ip, a.mac].filter(Boolean).join(" · ")),
+        h("div", { class: "tiny muted" }, [a.owner && `owner ${a.owner}`, a.os, a.department, a.criticality && `criticality ${a.criticality}`].filter(Boolean).join(" · "))))) : null,
+      h("div", { class: "label mt-8" }, v ? "Seen in these logs" : "Hosts seen in these logs"),
+      fromLogs.length ? fromLogs.map((a) => h("div", { class: "result-card small" },
+        h("div", { class: "row" }, h("b", { class: "grow" }, a.hostname), h("span", { class: "tiny faint" }, `${a.events} event(s)`)),
+        a.names.length > 1 ? h("div", { class: "tiny muted" }, `aka ${a.names.filter((n) => n !== a.hostname).join(", ")}`) : null,
+        a.ips.length || a.macs.length ? h("div", { class: "mono tiny" }, [...a.ips, ...a.macs].join(" · ")) : null,
+        a.users.length ? h("div", { class: "tiny muted" }, `users: ${a.users.slice(0, 4).join(", ")}`) : null,
+        h("div", { class: "row mt-8" }, h("button", { class: "btn sm", onclick: () => store.pivotTo("host", a.hostname) }, "Show activity"),
+          h("button", { class: "btn sm", onclick: async () => { try { await actions.addArtifacts([{ kind: "host", value: a.hostname, note: [a.ips.join(", "), a.macs.join(", ")].filter(Boolean).join(" · ") || "from Log Arranger" }]); actions.refreshCounts(); } catch (e) { fail(e); } } }, icon("plus"), "Add host"))))
+        : h("div", { class: "muted small" }, v ? "No host in these logs matches." : "No hosts identified."),
+      rowsWithIp ? h("button", { class: "btn sm", onclick: () => store.pivotTo(/^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$/i.test(v) ? "mac" : "ip", v) }, `Show ${rowsWithIp} event(s) involving ${v}`) : null);
+  };
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+  q.addEventListener("input", debounce(run, 300));
+  run();
+  return h("div", null, h("div", { class: "hint mb-8" }, "Look up an asset by IP, hostname or MAC in these logs and in your workspace inventory."), q, out);
+}
+
