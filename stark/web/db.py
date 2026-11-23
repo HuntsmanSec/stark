@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS assets (
   updated_at REAL NOT NULL, updated_by INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_assets_ws ON assets(workspace_id);
+CREATE TABLE IF NOT EXISTS case_context (
+  id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('ticket','closure','pentest')), data TEXT NOT NULL,
+  added_by INTEGER, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pentest_notes (
+  id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  customer TEXT DEFAULT '', title TEXT NOT NULL, details TEXT DEFAULT '', tester_ips TEXT DEFAULT '[]',
+  hosts TEXT DEFAULT '[]', starts_on TEXT DEFAULT '', ends_on TEXT DEFAULT '',
+  client_instruction TEXT DEFAULT 'raise_and_confirm', added_by INTEGER, created_at REAL NOT NULL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_pentest_ws ON pentest_notes(workspace_id);
 """
 
 MIGRATIONS = [
@@ -110,6 +122,24 @@ MIGRATIONS = [
     "ALTER TABLE cases ADD COLUMN confidence TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0",
     "ALTER TABLE observables ADD COLUMN sources_checked INTEGER DEFAULT 0",
+    # v0.4.0: automatic ATT&CK mapping
+    "ALTER TABLE techniques ADD COLUMN source TEXT DEFAULT 'manual'",
+    "ALTER TABLE techniques ADD COLUMN suppressed INTEGER DEFAULT 0",
+    "ALTER TABLE techniques ADD COLUMN basis TEXT DEFAULT '[]'",
+    # v0.4.0: SOC alert / ticket fields used by the report decision engine
+    "ALTER TABLE cases ADD COLUMN ticket_number TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN finding_id TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN alert_name TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN customer TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN alert_url TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN siem TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN alert_created TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN threat_id TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN close_notes TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN disposition TEXT DEFAULT ''",
+    "ALTER TABLE cases ADD COLUMN linked_findings TEXT DEFAULT '[]'",
+    "ALTER TABLE cases ADD COLUMN closed_by INTEGER",
+    "ALTER TABLE cases ADD COLUMN closed_at REAL",
 ]
 
 

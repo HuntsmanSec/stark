@@ -6,7 +6,7 @@ import { renderMarkdown } from "./md.js";
 import { renderArranger, purgeArranger } from "./arranger.js";
 
 const TABS = [
-  ["overview", "home", "Overview"], ["logs", "layers", "Log Arranger"], ["findings", "alert", "Findings"], ["observables", "target", "Observables"],
+  ["overview", "home", "Overview"], ["logs", "layers", "Log Arranger"], ["findings", "alert", "Findings"], ["observables", "target", "Observables"], ["related", "folder", "Related"],
   ["artifacts", "server", "Artifacts"], ["attack", "grid", "ATT&CK"], ["timeline", "clock", "Timeline & actions"],
   ["report", "file", "Report"], ["activity", "activity", "Activity"],
 ];
@@ -96,7 +96,7 @@ function switchTab(k) {
   draw();
 }
 function drawTab() {
-  const fn = { overview: tabOverview, logs: tabLogs, findings: tabFindings, observables: tabObservables, artifacts: tabArtifacts, attack: tabAttack,
+  const fn = { overview: tabOverview, logs: tabLogs, findings: tabFindings, observables: tabObservables, related: tabRelated, artifacts: tabArtifacts, attack: tabAttack,
     timeline: tabTimeline, report: tabReport, activity: tabActivity }[ctx.tab] || tabOverview;
   mount(ctx.body, fn(ctx.data));
 }
@@ -120,7 +120,7 @@ function header(c) {
       title,
       h("div", { class: "meta-row" },
         h("span", { class: "label" }, "Severity"), sel("severity", ["info", "low", "medium", "high", "critical"], SEV_LABEL),
-        h("span", { class: "label" }, "Status"), sel("status", ["open", "in_progress", "contained", "closed"], STATUS_LABEL),
+        h("span", { class: "label" }, "Status"), sel("status", ["open", "in_progress", "on_hold", "contained", "resolved", "closed", "cancelled"], STATUS_LABEL),
         h("span", { class: "label" }, "TLP"), sel("tlp", ["clear", "green", "amber", "amber+strict", "red"], { clear: "TLP:CLEAR", green: "TLP:GREEN", amber: "TLP:AMBER", "amber+strict": "TLP:AMBER+STRICT", red: "TLP:RED" }),
         h("span", { class: "label" }, "Assignee"), assignee)),
     h("div", { class: "row" },
@@ -149,7 +149,7 @@ function stepper(c) {
   const steps = [
     ["logs", "Analyse logs", c.findings.length ? `${c.findings.length} finding(s)` : c.events.length ? `${c.events.length} event(s) pinned` : "Add evidence", c.findings.length > 0 || c.events.length > 0 || c.observables.length > 0],
     ["observables", "Check indicators", c.observables.length ? `${c.observables.filter((o) => o.verdict !== "pending").length}/${c.observables.length} checked` : "None yet", c.observables.length > 0 && c.observables.every((o) => o.verdict !== "pending")],
-    ["attack", "Map ATT&CK", c.techniques.length ? `${c.techniques.length} technique(s)` : "Not mapped", c.techniques.length > 0],
+    ["attack", "Review ATT&CK", c.techniques.length ? `${c.techniques.length} technique(s) mapped` : "Maps as evidence arrives", c.techniques.length > 0],
     ["report", "Write report", c.report_md ? `Saved ${timeAgo(c.report_updated_at)}` : "Not started", !!c.report_md],
   ];
   const current = steps.findIndex((s) => !s[3]);
@@ -191,6 +191,7 @@ function tabOverview(c) {
             o.families.length ? h("span", { class: "small muted ellipsis", style: { maxWidth: "220px" } }, o.families.slice(0, 2).join(", ")) : null, verdictPill(o.verdict))))) : null),
     h("div", { class: "col gap-16" },
       verdictCard(c),
+      alertCard(c),
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, c.workspace.kind === "team" ? "Team discussion" : "Notes"), h("span", { class: "faint small" }, c.comments.length || "")),
         h("div", { class: "card-body col gap-12" },
           c.comments.length ? c.comments.map((m) => h("div", { class: "row top gap-12" }, avatar(m.user_name || "?"),
@@ -205,7 +206,7 @@ function nextStep(c) {
   let text, tab, label;
   if (!c.observables.length && !c.events.length) { text = "Start with the evidence: drop log exports into the Log Arranger, or paste indicators directly."; tab = "logs"; label = "Open Log Arranger"; }
   else if (c.observables.some((o) => o.verdict === "pending")) { text = "Some indicators haven't been checked yet. Run a reputation check on them."; tab = "observables"; label = "Check indicators"; }
-  else if (!c.techniques.length) { text = "Map what the attacker did to MITRE ATT&CK. Suggestions come from your logs."; tab = "attack"; label = "Map techniques"; }
+  else if (!c.techniques.length) { text = "No ATT&CK techniques are supported by the evidence yet. Analyse logs or check indicators and they map automatically."; tab = "logs"; label = "Open Log Arranger"; }
   else if (!c.report_md) { text = "You have enough to draft the initial incident report."; tab = "report"; label = "Generate report"; }
   else { text = "Keep the report up to date as the investigation goes on, and record the response actions you take."; tab = "timeline"; label = "Record actions"; }
   return h("div", null, h("p", { class: "muted small" }, text), h("button", { class: "btn primary sm", onclick: () => switchTab(tab) }, label, icon("chevron")));
@@ -217,6 +218,11 @@ function tabLogs(c) {
     addObservables: async (items) => { const d = await api("POST", `/cases/${ctx.id}/observables`, { items, source: "log arranger" }); toast(`Added ${d.added} indicator(s)${d.skipped ? `, ${d.skipped} already in the case` : ""}`); ctx.data = d.case; return d; },
     addArtifacts: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/artifacts`, { items }); toast(`Added ${items.length} artifact(s)`); },
     addTechniques: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/techniques`, { items }); toast(`Mapped ${items.length} technique(s)`); },
+    autoMap: async (items, products) => {
+      const d = await api("POST", `/cases/${ctx.id}/techniques/from-logs`, { items, products });
+      ctx.data = d.case; refreshChrome();
+      if (d.added) toast(`Mapped ${d.added} ATT&CK technique(s) automatically from these logs`, "info");
+    },
     addFindings: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/findings`, { items }); toast(`Added ${items.length} finding(s); their ATT&CK techniques were mapped too`); },
     addEvents: async (items) => { ctx.data = await api("POST", `/cases/${ctx.id}/events`, { items }); toast(`Pinned ${items.length} event(s) to the case timeline`); },
     refreshCounts: refreshChrome,
@@ -346,17 +352,29 @@ function tabAttack(c) {
   search.addEventListener("input", debounce(draw2, 150));
   const tactics = ["Reconnaissance", "Resource Development", "Initial Access", "Execution", "Persistence", "Privilege Escalation", "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement", "Collection", "Command and Control", "Exfiltration", "Impact"];
   const by = {}; c.techniques.forEach((t) => { (by[t.tactic] = by[t.tactic] || []).push(t); });
+  const SRC_LABEL = { finding: "finding", intel: "threat intel", logs: "logs", event: "timeline", artifact: "artifact", alert: "alert name", manual: "added by analyst", auto: "auto" };
+  const hide = (t) => call("POST", "/techniques/hide", { technique_id: t.technique_id }, `${t.technique_id} removed from the mapping`);
   const board = c.techniques.length ? h("div", { class: "attack-board" }, tactics.filter((t) => by[t]).map((tac) => h("div", { class: "tactic-col" },
     h("h4", null, tac, h("span", { class: "faint" }, by[tac].length)),
     by[tac].map((t) => h("div", { class: "tech-card" },
       h("div", { class: "row" }, h("a", { class: "tid", href: `https://attack.mitre.org/techniques/${t.technique_id.replace(".", "/")}/`, target: "_blank", rel: "noopener noreferrer" }, t.technique_id),
-        h("span", { class: "spacer" }), h("button", { class: "btn ghost sm icon", title: "Remove", onclick: () => call("DELETE", `/techniques/${t.id}`) }, icon("x"))),
+        t.auto ? h("span", { class: "tag", title: "Mapped automatically from the case evidence" }, icon("zap"), "Auto") : null,
+        h("span", { class: "spacer" }), h("button", { class: "btn ghost sm icon", title: "Remove from the mapping", onclick: () => hide(t) }, icon("x"))),
       h("div", { class: "name" }, t.name),
-      (() => { const n = h("textarea", { class: "input", rows: 2, placeholder: "Evidence / note", style: { fontSize: "12px" } }); n.value = t.note || "";
-        n.addEventListener("change", () => call("PATCH", `/techniques/${t.id}`, { note: n.value }, "Note saved")); return n; })())))))
-    : empty("grid", "No techniques mapped yet", "Use the suggestions from the Log Arranger, or search the catalogue on the right.", h("button", { class: "btn", onclick: () => switchTab("logs") }, icon("layers"), "Get suggestions from logs"));
+      (t.sources || []).length ? h("div", { class: "row wrap gap-4 mt-8" }, t.sources.map((s2) => h("span", { class: "tiny faint" }, SRC_LABEL[s2] || s2))) : null,
+      (t.basis || []).length ? h("ul", { class: "tiny muted", style: { paddingLeft: "16px", margin: "4px 0", wordBreak: "break-word" } }, t.basis.slice(0, 4).map((b) => h("li", null, b))) : null,
+      (() => { const n = h("textarea", { class: "input", rows: 2, placeholder: "Analyst note (optional)", style: { fontSize: "12px" } }); n.value = t.note || "";
+        n.addEventListener("change", () => (t.id ? call("PATCH", `/techniques/${t.id}`, { note: n.value }, "Note saved")
+          : call("POST", "/techniques", { items: [{ technique_id: t.technique_id, note: n.value, source: "auto" }] }, "Note saved"))); return n; })())))))
+    : empty("grid", "Nothing mapped yet", "Techniques are mapped automatically as evidence arrives: security findings, logs in the Log Arranger, threat intelligence on indicators, pinned events and artifacts. You can also search the catalogue.", h("button", { class: "btn", onclick: () => switchTab("logs") }, icon("layers"), "Open Log Arranger"));
+  const hidden = c.techniques_hidden || [];
+  const autoN = c.techniques.filter((t) => t.auto).length;
   mount(wrap, h("div", { class: "grid grid-main" },
-    h("div", { class: "card card-pad" }, h("div", { class: "row mb-16" }, h("h3", { class: "grow" }, "Attack chain"), h("span", { class: "small muted" }, `${c.techniques.length} technique(s) across ${Object.keys(by).length} tactic(s)`)), board),
+    h("div", { class: "card card-pad" }, h("div", { class: "row mb-16 wrap" }, h("h3", { class: "grow" }, "Attack chain"), h("span", { class: "small muted" }, `${c.techniques.length} technique(s) across ${Object.keys(by).length} tactic(s)${autoN ? ` · ${autoN} mapped automatically` : ""}`)),
+      h("div", { class: "hint mb-16" }, "Mapping follows the evidence: findings, the logs you arrange, threat intelligence on the case indicators, pinned events and artifacts. Each technique lists what supports it. Remove anything that doesn't fit and it stays removed."),
+      board,
+      hidden.length ? h("details", { class: "mt-16" }, h("summary", { class: "small", style: { cursor: "pointer" } }, `Removed by an analyst (${hidden.length})`),
+        h("div", { class: "row wrap gap-4 mt-8" }, hidden.map((t) => h("button", { class: "chip-btn", title: "Restore", onclick: () => call("POST", "/techniques/restore", { technique_id: t.id }, `${t.id} restored`) }, `${t.id} ${t.name}`, icon("refresh"))))) : null),
     h("div", { class: "card card-pad" }, h("h3", { class: "mb-8" }, "Add a technique"), search, h("div", { class: "mt-8" }, results),
       h("div", { class: "hint mt-8" }, "A curated set of commonly seen Enterprise techniques. Any other ID can be added too: type it and press Enter."))));
   search.addEventListener("keydown", (e) => { if (e.key === "Enter" && /^t\d{4}(\.\d{3})?$/i.test(search.value.trim())) call("POST", "/techniques", { items: [{ technique_id: search.value.trim() }] }, "Technique mapped"); });
@@ -397,31 +415,46 @@ function tabReport(c) {
   const status = h("span", { class: "small muted" }, c.report_md ? `Saved ${timeAgo(c.report_updated_at)}` : "Not saved yet");
   const render = () => { preview.innerHTML = renderMarkdown(editor.value) || '<p class="muted">The preview appears here.</p>'; };
   editor.addEventListener("input", debounce(() => { render(); ctx.dirty = editor.value !== (ctx.data.report_md || ""); status.textContent = ctx.dirty ? "Unsaved changes" : "Saved"; }, 120));
+  const template = h("select", { class: "meta-select", "aria-label": "Template" },
+    h("option", { value: "soc" }, "SOC write-up (decides append / close / incident)"), h("option", { value: "technical" }, "Detailed technical report"));
+  const outcome = h("select", { class: "meta-select", "aria-label": "Outcome" },
+    [["", "Outcome: decide automatically"], ["1", "Force: append to ticket"], ["2", "Force: close as non-threatening"], ["3", "Force: raise an incident"]].map(([v, l]) => h("option", { value: v }, l)));
+  template.onchange = () => { outcome.disabled = template.value !== "soc"; };
+  const banner = h("div");
   const gen = h("button", { class: "btn primary" }, icon("sparkle"), c.report_md ? "Regenerate draft" : "Generate draft");
   gen.onclick = async () => {
     if (editor.value.trim() && !await confirmDialog("Replace the current text?", "A new draft will replace what's in the editor. Your saved version stays until you click Save.", { ok: "Generate", danger: false })) return;
     busy(gen, true, "Writing…");
-    try { const r = await api("POST", `/cases/${ctx.id}/report/generate`, {}); editor.value = r.markdown; render(); ctx.dirty = true; status.textContent = "Draft generated (not saved)"; toast("Draft ready. Review it, then save."); }
-    catch (e) { fail(e); }
+    try {
+      const r = await api("POST", `/cases/${ctx.id}/report/generate`, { template: template.value, outcome: outcome.value ? Number(outcome.value) : undefined });
+      editor.value = r.markdown; render(); ctx.dirty = true; status.textContent = "Draft generated (not saved)";
+      mount(banner, r.template === "soc" ? [decisionBanner(r), r.note ? h("div", { class: "notice warn mt-8" }, icon("info"), h("div", { class: "small" }, r.note)) : null] : null);
+      toast("Draft ready. Review it, then save.");
+    } catch (e) { fail(e); }
     busy(gen, false);
   };
   const save = h("button", { class: "btn" }, icon("check"), "Save");
   save.onclick = async () => { busy(save, true); const d = await call("PATCH", "", { report_md: editor.value }, "Report saved"); if (d) { ctx.dirty = false; } else busy(save, false); };
   editor.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save.click(); } });
   render();
-  const checklist = [
-    ["Quick verdict & confidence", true], ["Timeline", c.events.length + c.findings.length > 0], ["Event details & analysis", c.findings.length > 0 || c.observables.length > 0],
-    ["MITRE ATT&CK", c.techniques.length > 0], ["Recommendations", true], ["Actions taken", c.actions.length > 0], ["IOCs & artifacts", c.observables.length + c.artifacts.length > 0],
-  ];
+  const MARK = "**END ANALYST-ONLY — CUSTOMER REPORT STARTS BELOW**";
+  const part = (which) => { const t = editor.value; const i = t.indexOf(MARK); if (i < 0) return t; return which === "analyst" ? t.slice(0, i).trim() : t.slice(i + MARK.length).trim(); };
+  const ready = [["alert name", !!c.alert_name], ["customer", !!c.customer], ["finding ID", !!c.finding_id], ["alert link", !!c.alert_url],
+    ["log evidence", c.findings.length + c.events.length > 0], ["indicators checked", c.observables.length > 0 && c.observables.every((o) => o.verdict !== "pending")]];
   return h("div", { class: "col gap-16" },
     h("div", { class: "card card-pad no-print" }, h("div", { class: "row wrap gap-12" },
-      h("div", { class: "grow" }, h("h3", null, "Incident report writer"), h("div", { class: "small muted" }, "A structured report: quick verdict, executive summary, timeline, event details, analysis, interpretation, confidence level, recommendations, actions taken, and IOCs & artifacts (as code).")),
-      h("span", { class: "tag", title: "IPs, domains, URLs and emails are written as 185[.]220[.]101[.]1 / hxxps[://]… so they can't be clicked by accident" }, icon("lock"), " Indicators always defanged"), gen, save),
-      h("div", { class: "row wrap gap-12 mt-16" }, checklist.map(([t, ok]) => h("span", { class: "row gap-4 small", style: { color: ok ? "var(--ok)" : "var(--text-3)" } }, icon(ok ? "check" : "info"), t, ok ? "" : " (no data yet)")))),
+      h("div", { class: "grow", style: { minWidth: "min(100%, 340px)" } }, h("h3", null, "Report writer"), h("div", { class: "small muted" }, "Correlates the logs, OSINT enrichment, past tickets, closures and pentest notes, reaches a verdict and writes exactly one outcome: an append note, a closure note, or an incident (analyst-only assessment plus customer report). Nothing is invented: missing data is written as Not available.")),
+      h("span", { class: "tag", title: "Investigated domains, URLs and external IPv4 addresses are written as bad.example[.]com / 192.0.2[.]10 / hxxps://…; the alert link stays live" }, icon("lock"), " Final-dot defanging"),
+      template, outcome, gen, save),
+      h("div", { class: "row wrap gap-12 mt-16" }, ready.map(([t, ok]) => h("span", { class: "row gap-4 small", style: { color: ok ? "var(--ok)" : "var(--text-3)" } }, icon(ok ? "check" : "info"), t, ok ? "" : " (missing)")),
+        h("button", { class: "link-btn small", onclick: () => switchTab("related") }, "Past tickets, closures & pentest notes"))),
+    banner,
     h("div", { class: "report-layout" },
       h("div", { class: "card" }, h("div", { class: "card-head no-print" }, icon("edit"), h("h3", null, "Markdown"), status), h("div", { class: "card-body" }, editor)),
       h("div", { class: "card" }, h("div", { class: "card-head no-print" }, icon("eye"), h("h3", null, "Preview"),
         h("button", { class: "btn sm", onclick: () => copy(editor.value, "Markdown copied") }, icon("copy"), "Copy"),
+        h("button", { class: "btn sm", title: "Copy only the customer report (everything below the analyst-only marker)", onclick: () => copy(part("customer"), "Customer report copied") }, icon("copy"), "Customer part"),
+        h("button", { class: "btn sm", title: "Copy only the analyst-only assessment", onclick: () => copy(part("analyst"), "Analyst assessment copied") }, icon("copy"), "Analyst part"),
         h("button", { class: "btn sm", onclick: () => download(`${c.ref}-report.md`, editor.value, "text/markdown") }, icon("download"), ".md"),
         h("button", { class: "btn sm", onclick: () => window.print() }, icon("printer"), "Print / PDF")),
         h("div", { class: "report-paper" }, preview))));
@@ -439,6 +472,8 @@ export { statusPill, sevPill };
 // ------------------------------------------------------------- verdict card
 const VERDICT_LABELS = { true_positive: "True positive", likely_malicious: "Likely malicious", suspicious: "Suspicious", benign: "Benign",
   false_positive: "False positive", inconclusive: "Inconclusive" };
+const SOC_VERDICT = { true_positive: "True Positive - Malicious", likely_malicious: "True Positive - Malicious", suspicious: "Inconclusive",
+  benign: "True Positive - Benign", false_positive: "False Positive", inconclusive: "Inconclusive" };
 const VERDICT_COLOR = { true_positive: "var(--mal)", likely_malicious: "var(--high)", suspicious: "var(--sus)", benign: "var(--ok)", false_positive: "var(--ok)", inconclusive: "var(--unk)" };
 function verdictCard(c) {
   const a = c.assessment;
@@ -455,6 +490,7 @@ function verdictCard(c) {
       h("div", { style: { fontSize: "20px", fontWeight: 750, color } }, VERDICT_LABELS[a.verdict] || a.verdict),
       h("div", { class: "row mt-8 mb-8" }, h("span", { class: "small muted" }, "Confidence"),
         h("span", { class: `pill ${a.confidence === "high" ? "harmless" : a.confidence === "medium" ? "suspicious" : ""}` }, a.confidence)),
+      h("div", { class: "small mb-8" }, h("span", { class: "muted" }, "In SOC write-ups: "), h("b", null, SOC_VERDICT[a.verdict] || "Inconclusive")),
       h("ul", { class: "small muted", style: { paddingLeft: "18px", margin: "6px 0 12px" } }, a.factors.map((f) => h("li", null, f))),
       h("div", { class: "row wrap" }, h("span", { class: "label" }, "Override"), vSel, cSel)));
 }
@@ -528,3 +564,121 @@ export function findingCard(f, { onAdd, added, onEvidence, collapsed = false } =
     body);
 }
 
+
+// ------------------------------------------------------------ alert & ticket
+const DISPOSITION_LABEL = { "": "Not decided", incident: "Raised as incident", appended: "Appended to a ticket", non_threatening: "Closed as non-threatening" };
+function alertCard(c) {
+  const field = (key, label, ph, opts = {}) => {
+    const el = opts.area ? h("textarea", { class: "input", rows: 3, placeholder: ph }) : h("input", { class: "input" + (opts.mono ? " mono" : ""), placeholder: ph });
+    el.value = c[key] || "";
+    if (opts.area) el.addEventListener("input", () => { ctx.dirty = true; });
+    el.addEventListener("change", async () => { ctx.dirty = false; await call("PATCH", "", { [key]: el.value.trim() }, "Saved"); });
+    return h("div", { class: `field${opts.full ? " full" : ""}` }, h("label", null, label), el);
+  };
+  const disp = h("select", { class: "input" }, Object.entries(DISPOSITION_LABEL).map(([k, l]) => h("option", { value: k, selected: (c.disposition || "") === k }, l)));
+  disp.onchange = () => call("PATCH", "", { disposition: disp.value }, "Disposition saved");
+  const linked = h("input", { class: "input mono", placeholder: "F-1001, F-1002", value: (c.linked_findings || []).join(", ") });
+  linked.addEventListener("change", () => call("PATCH", "", { linked_findings: linked.value.split(/[\s,;]+/).filter(Boolean) }, "Saved"));
+  const filled = ["alert_name", "customer", "finding_id"].filter((k) => c[k]).length;
+  return h("div", { class: "card" },
+    h("div", { class: "card-head" }, icon("alert"), h("h3", null, "Alert & ticket"), h("span", { class: "tag" }, filled === 3 ? "ready for triage" : "add alert details")),
+    h("div", { class: "card-body" },
+      h("div", { class: "form-grid" },
+        field("alert_name", "Alert name", "As named in the SIEM", { full: true }), field("customer", "Customer", "Client"),
+        field("finding_id", "Finding ID", "F-1001", { mono: true }), field("siem", "Log source / SIEM", "Microsoft Sentinel"),
+        field("alert_created", "Alert created", "2026-11-20T02:20:00Z", { mono: true }), field("threat_id", "Incident / threat ID", "", { mono: true }),
+        field("alert_url", "Alert link (kept live in reports)", "https://…", { full: true, mono: true }),
+        field("ticket_number", "Ticket (INC) number", "INC0012345", { mono: true }),
+        h("div", { class: "field" }, h("label", null, "Disposition"), disp),
+        h("div", { class: "field full" }, h("label", null, "Finding IDs in this ticket"), linked),
+        field("close_notes", "Close notes (what was done)", "e.g. Blocked 45.77.12.9 on the firewall; reset jdoe's password and revoked sessions on 2026-11-20.", { area: true, full: true })),
+      h("div", { class: "hint mt-8" }, "Past cases with the same alert name and customer are used as past tickets; cases closed as non-threatening become past closures. Close notes that record a real remediation let later findings for the same entities be closed.")));
+}
+
+// ---------------------------------------------------------------- related
+const OUTCOME_ICON = { 1: "link", 2: "check", 3: "alert" };
+const INSTR_LABEL = { ignore: "Ignore alerts from the test", raise_and_confirm: "Raise and confirm scope", unannounced: "Unannounced: raise as incident" };
+function decisionBanner(a) {
+  if (!a) return null;
+  return h("div", { class: `card card-pad decision o${a.outcome}` },
+    h("div", { class: "row wrap gap-12" }, icon(OUTCOME_ICON[a.outcome] || "info"),
+      h("div", { class: "grow" }, h("b", null, a.outcome_label + (a.target ? `: ${a.target}` : "")),
+        h("div", { class: "small muted" }, `Verdict ${a.verdict.label} (${a.verdict.confidence} confidence)` + (a.reason ? ` · ${a.reason}` : ""))),
+      a.signs && a.signs.length ? h("span", { class: "pill malicious" }, `${a.signs.length} sign(s) of compromise`) : null));
+}
+function tabRelated(c) {
+  const wrap = h("div", { class: "col gap-16" }, h("div", { class: "empty" }, h("span", { class: "spinner" })));
+  const load = async () => {
+    let d;
+    try { d = await api("GET", `/cases/${ctx.id}/context`); } catch (e) { mount(wrap, h("div", { class: "notice warn" }, icon("alert"), e.message)); return; }
+    const rel = d.analysis.related;
+    const matchChips = (ms) => (ms || []).map((m) => h("span", { class: "match-chip", title: `in ${m.where}` }, `${m.type}: ${m.value}`));
+    const tickets = rel.tickets.length ? rel.tickets.map((t) => h("div", { class: "rel-row" }, icon("folder"),
+      h("div", { class: "grow" },
+        h("div", { class: "row wrap gap-8" }, t.case_id ? link(`/cases/${t.case_id}`, { class: "mono" }, t.case_number) : h("b", { class: "mono" }, t.case_number || "Ticket"),
+          h("span", { class: `pill ${t.open ? "suspicious" : ""}` }, t.status || "?"), t.involves ? h("span", { class: "tag" }, "already contains this finding") : null,
+          h("span", { class: "tiny faint" }, t.source === "imported" ? "imported" : "from this workspace")),
+        t.matches.length ? h("div", { class: "row wrap gap-4 mt-8" }, matchChips(t.matches)) : h("div", { class: "tiny faint mt-8" }, "No shared entities (same alert name only, which is not a match)"),
+        t.remediation ? h("div", { class: "small mt-8" }, h("b", null, t.remediation.can_close ? "Remediation settles this finding: " : "Remediation does not settle this finding: "), `${t.remediation.done.join(", ")}. ${t.remediation.reason}.`) : null)))
+      : [h("div", { class: "muted small" }, c.alert_name ? "No other case in this workspace has the same alert name" + (c.customer ? " and customer." : ".") : "Add the alert name (Overview → Alert & ticket) to match past tickets for the same alert.")];
+    const closures = rel.closures.length ? rel.closures.map((x) => h("div", { class: "rel-row" }, icon("check"),
+      h("div", { class: "grow" }, h("div", { class: "row wrap gap-8" }, x.case_id ? link(`/cases/${x.case_id}`, null, x.finding_id || "Closure") : h("b", null, x.finding_id || "Closure"),
+        h("span", { class: "small muted" }, `closed by ${x.closed_by || "?"} on ${x.closed_on || "?"}`)),
+        x.matches.length ? h("div", { class: "row wrap gap-4 mt-8" }, matchChips(x.matches)) : h("div", { class: "tiny faint mt-8" }, "No shared entities")))) : [h("div", { class: "muted small" }, "No past non-threatening closures for this alert.")];
+    const pentests = rel.pentests.length ? rel.pentests.map((p) => h("div", { class: "rel-row" }, icon("shield"),
+      h("div", { class: "grow" }, h("div", { class: "row wrap gap-8" }, h("b", null, p.title), h("span", { class: "tag" }, INSTR_LABEL[p.instruction] || p.instruction),
+        p.related ? h("span", { class: `pill ${p.covered ? "harmless" : "suspicious"}` }, p.covered ? "covers this activity" : "related, not covering") : h("span", { class: "tiny faint" }, "not related: left out of the report")),
+        p.matched.length ? h("div", { class: "small mt-8" }, "Matched: ", p.matched.join(", ").replace(/`/g, "")) : null,
+        p.related && !p.covered && p.gaps.length ? h("div", { class: "tiny muted mt-8" }, p.gaps.join("; ").replace(/`/g, "")) : null),
+      p.source === "workspace" && p.id ? h("button", { class: "btn ghost sm icon", title: "Edit", onclick: () => pentestDialog(c, d.records.pentests.find((n) => n.id === p.id), load) }, icon("edit")) : null))
+      : [h("div", { class: "muted small" }, "No pentest notes for this customer.")];
+    const imported = [...d.records.tickets, ...d.records.closures, ...d.records.pentests].filter((r) => r.context_id);
+    const ta = h("textarea", { class: "input mono", rows: 5, placeholder: '[{"_type": "fusion-closure", "detail": "…", "closure_note": "…", "closed_by": "…", "closed_on": "…"},\n {"case number": "INC0012345", "status": "IN_PROGRESS", "subject": "…", "close_notes": "…", "findings": ["F-1"]},\n {"_type": "pentest-note", "title": "…", "tester_ips": ["198.51.100.0/24"], "starts_on": "…", "ends_on": "…", "client_instruction": "ignore"}]' });
+    const imp = h("button", { class: "btn" }, icon("upload"), "Import records");
+    imp.onclick = async () => { if (!ta.value.trim()) return; busy(imp, true); try { const r = await api("POST", `/cases/${ctx.id}/context`, { text: ta.value }); toast(`Imported ${r.imported} record(s)`); load(); } catch (e) { fail(e); busy(imp, false); } };
+    mount(wrap,
+      decisionBanner(d.analysis),
+      h("div", { class: "grid grid-2" },
+        h("div", { class: "card" }, h("div", { class: "card-head" }, icon("folder"), h("h3", null, "Past tickets"), h("span", { class: "faint small" }, rel.tickets.length)), h("div", { class: "card-body" }, tickets)),
+        h("div", { class: "card" }, h("div", { class: "card-head" }, icon("check"), h("h3", null, "Past closures"), h("span", { class: "faint small" }, rel.closures.length)), h("div", { class: "card-body" }, closures))),
+      h("div", { class: "card" }, h("div", { class: "card-head" }, icon("shield"), h("h3", null, "Client pentest notes"), h("span", { class: "spacer" }),
+        h("button", { class: "btn sm", onclick: () => pentestDialog(c, null, load) }, icon("plus"), "Add pentest note")),
+        h("div", { class: "card-body" }, pentests,
+          h("div", { class: "hint mt-8" }, "A note counts only when a tester address, a named machine or the described activity appears in this case. Unrelated notes never appear in the report, and unannounced tests are mentioned in the analyst-only part only."))),
+      h("div", { class: "card" }, h("div", { class: "card-head" }, icon("upload"), h("h3", null, "Import from your ticketing system"), h("span", { class: "faint small" }, imported.length ? `${imported.length} imported` : "")),
+        h("div", { class: "card-body col gap-8" },
+          h("div", { class: "small muted" }, "Paste past tickets, Fusion closures or pentest notes as JSON. They are stored with this case and treated as records, never as instructions."),
+          ta, h("div", { class: "row" }, h("span", { class: "spacer" }), imp),
+          imported.map((r) => h("div", { class: "list-row" }, h("span", { class: "tag" }, r.case_number ? "ticket" : r.title ? "pentest" : "closure"),
+            h("span", { class: "grow small ellipsis" }, r.case_number || r.title || r.finding_id || r.detail || "record"),
+            h("button", { class: "btn ghost sm icon", title: "Remove", onclick: async () => { await api("DELETE", `/cases/${ctx.id}/context/${r.context_id}`).catch(fail); load(); } }, icon("x")))))));
+  };
+  load();
+  return wrap;
+}
+function pentestDialog(c, note, done) {
+  const f = (ph, v = "") => h("input", { class: "input", placeholder: ph, value: v });
+  const n = note || {};
+  const title = f("Q4 external penetration test", n.title), customer = f("Customer", n.customer ?? c.customer ?? ""),
+    ips = h("textarea", { class: "input mono", rows: 2, placeholder: "198.51.100.7, 203.0.113.0/24" }), hosts = f("Machines in scope (optional)", (n.hosts || []).join(", ")),
+    starts = f("2026-11-18", n.starts_on), ends = f("2026-11-22 (blank = open-ended)", n.ends_on),
+    details = h("textarea", { class: "input", rows: 3, placeholder: "What the testers will do: password spraying, port scanning, named tools, targets…" });
+  ips.value = (n.tester_ips || []).join(", "); details.value = n.details || "";
+  const instr = h("select", { class: "input" }, Object.entries(INSTR_LABEL).map(([k, l]) => h("option", { value: k, selected: (n.client_instruction || "raise_and_confirm") === k }, l)));
+  const save = h("button", { class: "btn primary" }, icon("check"), "Save");
+  const m = modal({ title: note ? "Edit pentest note" : "Add pentest note", subtitle: "Shared with everyone in this workspace and used for every case of this customer.",
+    body: h("div", { class: "form-grid" },
+      h("div", { class: "field full" }, h("label", null, "Title"), title), h("div", { class: "field" }, h("label", null, "Customer"), customer),
+      h("div", { class: "field" }, h("label", null, "Client instruction"), instr),
+      h("div", { class: "field full" }, h("label", null, "Tester IP addresses / ranges"), ips),
+      h("div", { class: "field" }, h("label", null, "Starts on"), starts), h("div", { class: "field" }, h("label", null, "Ends on"), ends),
+      h("div", { class: "field full" }, h("label", null, "Machines"), hosts), h("div", { class: "field full" }, h("label", null, "Details"), details)),
+    foot: [note ? h("button", { class: "btn danger", onclick: async () => { if (!await confirmDialog("Delete this pentest note?", "It will no longer be considered for any case.", { ok: "Delete" })) return; await api("DELETE", `/workspaces/${c.workspace_id}/pentests/${note.id}`).catch(fail); m.close(); done(); } }, icon("trash"), "Delete") : null,
+      h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => m.close() }, "Cancel"), save] });
+  save.onclick = async () => {
+    busy(save, true);
+    const payload = { title: title.value, customer: customer.value, tester_ips: ips.value, hosts: hosts.value, starts_on: starts.value, ends_on: ends.value, details: details.value, client_instruction: instr.value };
+    try { await api(note ? "PUT" : "POST", `/workspaces/${c.workspace_id}/pentests${note ? `/${note.id}` : ""}`, payload); m.close(); toast("Pentest note saved"); done(); }
+    catch (e) { fail(e); busy(save, false); }
+  };
+}

@@ -267,3 +267,105 @@ def suggest_techniques(texts: Iterable[str], max_evidence: int = 3) -> List[Dict
                 start = max(0, m.start() - 60)
                 h["evidence"].append(text[start:m.end() + 60].strip()[:220])
     return sorted(hits.values(), key=lambda h: (TACTIC_ORDER.get(h["tactic"], 99), -h["count"]))
+
+
+# ------------------------------------------------------------------ automatic mapping
+#
+# Techniques are mapped automatically from the evidence in a case: the security
+# findings, the logs arranged for it, pinned timeline events, recorded artifacts
+# (processes, command lines), the alert name, and threat intelligence on the IOCs.
+# Each technique keeps the evidence it came from so the report can cite it.
+
+# Context-only techniques: a regex hit alone does not show attacker behaviour (any
+# successful logon is "Valid Accounts"). They are mapped only when a finding backs them.
+WEAK = frozenset({"T1078", "T1078.004", "T1021.001", "T1021.004", "T1110", "T1489", "T1070.004", "T1082",
+                  "T1016", "T1057", "T1033", "T1049", "T1113", "T1112", "T1021.006", "T1567.002", "T1069",
+                  "T1190"})
+
+# Threat-intel vocabulary (malware families, tags, source summaries) -> technique.
+INTEL_RULES = [
+    ("T1566", r"\bphish(ing)?\b"),
+    ("T1071.001", r"\b(c2|c&c|command and control|botnet|cobalt ?strike|sliver|havoc|brute ?ratel|beacon|rat\b|remote access trojan)"),
+    ("T1595", r"\b(scanner|scanning|port ?scan|web ?scanner|mass ?scan)"),
+    ("T1110", r"\b(brute[- ]?force|ssh brute|rdp brute|credential stuffing)"),
+    ("T1110.003", r"\bpassword spray"),
+    ("T1090.003", r"\b(tor exit|tor node|tor proxy|\btor\b)"),
+    ("T1496", r"\b(cryptomin\w*|coinminer|xmrig|monero)"),
+    ("T1486", r"\bransomware\b"),
+    ("T1555", r"\b(info-?stealer|stealer|redline|lumma|raccoon|vidar)\b"),
+    ("T1105", r"\b(loader|dropper|downloader)\b"),
+    ("T1190", r"\b(exploit(ation)?|cve-\d{4}-\d+)"),
+    ("T1498", r"\bddos\b"),
+]
+_INTEL = [(tid, re.compile(rx, re.I)) for tid, rx in INTEL_RULES]
+
+
+def _basis_add(out: Dict[str, Dict], tid: str, source: str, text: str, strong: bool = True) -> None:
+    t = out.setdefault(tid, {**technique(tid), "basis": [], "sources": set(), "strong": False})
+    t["sources"].add(source)
+    t["strong"] = t["strong"] or strong
+    if text and text not in t["basis"] and len(t["basis"]) < 6:
+        t["basis"].append(text[:300])
+
+
+def auto_map(case: Dict) -> List[Dict]:
+    """Return the ATT&CK techniques the case evidence supports, each with its basis.
+
+    Sources, strongest first: security findings (detector output), threat intelligence on
+    the case IOCs, pinned events / artifacts / alert name (keyword rules). Context-only
+    techniques (``WEAK``) need a finding behind them."""
+    out: Dict[str, Dict] = {}
+    for f in case.get("findings") or []:
+        if f.get("status") == "dismissed":
+            continue
+        for m in f.get("mitre") or []:
+            tid = m.get("id") if isinstance(m, dict) else str(m)
+            if tid:
+                n = f.get("count") or 0
+                _basis_add(out, tid.upper(), "finding",
+                           f"Finding: {f.get('title')}" + (f" ({n} event{'s' if n != 1 else ''})" if n else ""))
+
+    for o in case.get("observables") or []:
+        if o.get("verdict") not in ("malicious", "suspicious"):
+            continue
+        # Only sources that rate the indicator malicious describe what it does.
+        bits = list(o.get("families") or []) if o.get("verdict") == "malicious" else []
+        for r in o.get("results") or []:
+            if r.get("verdict") == "malicious":
+                bits += [r.get("summary") or ""] + list(r.get("tags") or []) + list(r.get("malware_families") or [])
+        text = " ".join(str(b) for b in bits if b)
+        for tid, rx in _INTEL:
+            m = rx.search(text)
+            if m:
+                srcs = ", ".join((o.get("flagged_by") or [])[:4]) or "threat intelligence"
+                _basis_add(out, tid, "intel", f"Threat intelligence ({srcs}) on {o.get('value')}: \"{m.group(0)}\"")
+        if o.get("type") == "domain":
+            try:
+                from .analysis import typosquat
+                hit = typosquat(o.get("value") or "")
+            except Exception:  # noqa: BLE001 - heuristics never break mapping
+                hit = None
+            if hit:
+                _basis_add(out, "T1583.001", "intel", f"Look-alike domain {o.get('value')} imitates {hit.get('target')} ({hit.get('technique')})")
+
+    texts: List[tuple] = []
+    if case.get("alert_name"):
+        texts.append(("alert", f"Alert: {case['alert_name']}", case["alert_name"]))
+    for e in case.get("events") or []:
+        texts.append(("event", f"Timeline event {e.get('time') or ''}: {e.get('text', '')}".strip(), e.get("text") or ""))
+    for a in case.get("artifacts") or []:
+        if a.get("kind") in ("process", "command_line", "registry", "file"):
+            texts.append(("artifact", f"Artifact ({a['kind'].replace('_', ' ')}): {a.get('value')}", a.get("value") or ""))
+    for source, label, text in texts:
+        for tid, rx in _COMPILED:
+            if rx.search(text):
+                _basis_add(out, tid, source, label, strong=tid not in WEAK)
+
+    result = []
+    for t in out.values():
+        if not t["strong"] and "finding" not in t["sources"]:
+            continue
+        t["sources"] = sorted(t["sources"])
+        t.pop("strong", None)
+        result.append(t)
+    return sorted(result, key=lambda h: (TACTIC_ORDER.get(h["tactic"], 99), h["id"]))

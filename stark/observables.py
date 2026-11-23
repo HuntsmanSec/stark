@@ -77,6 +77,57 @@ def refang(text: str) -> str:
     return s
 
 
+def defang_final(value: str, otype: Optional["ObsType"] = None) -> str:
+    """SOC ticket style: bracket the final dot only and neutralise the scheme.
+
+    ``https://bad.example.com/x`` -> ``hxxps://bad.example[.]com/x``; ``192.0.2.10`` ->
+    ``192.0.2[.]10``. IPv6 and internal (private/reserved) IPv4 addresses are left as they
+    are, and hashes are unchanged. Idempotent."""
+    v = refang(value)
+    t = otype or detect_type(v)
+    if t is None:
+        return value
+    if t.is_hash or t is ObsType.IPV6:
+        return v
+    if t is ObsType.IPV4:
+        return v if is_internal_ip(v) else v[: v.rfind(".")] + "[.]" + v[v.rfind(".") + 1:]
+
+    def host_final(host: str) -> str:
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+            if ":" in host or is_internal_ip(host):
+                return host
+        except ValueError:
+            pass
+        i = host.rfind(".")
+        return host if i == -1 else host[:i] + "[.]" + host[i + 1:]
+
+    if t is ObsType.URL:
+        parts = urlsplit(v)
+        scheme = re.sub(r"^http", "hxxp", parts.scheme, flags=re.I)
+        scheme = re.sub(r"^ftp", "fxp", scheme, flags=re.I)
+        rest = v[len(parts.scheme) + 3:]
+        host_end = len(rest)
+        for ch in "/?#":
+            i = rest.find(ch)
+            if i != -1:
+                host_end = min(host_end, i)
+        host, tail = rest[:host_end], rest[host_end:]
+        cred = ""
+        if "@" in host:
+            cred, host = host.rsplit("@", 1)
+            cred += "@"
+        port = ""
+        m = re.match(r"^(.*?)(:\d+)$", host)
+        if m and not host.startswith("["):
+            host, port = m.group(1), m.group(2)
+        return f"{scheme}://{cred}{host_final(host)}{port}{tail}"
+    if t is ObsType.EMAIL:
+        local, domain = v.rsplit("@", 1)
+        return f"{local}@{host_final(domain)}"
+    return host_final(v)
+
+
 def defang(value: str, otype: Optional["ObsType"] = None) -> str:
     """Make an IOC safe to paste into tickets, chat and reports.
 
@@ -196,6 +247,22 @@ def parse_observable(raw: str, forced: Optional[ObsType] = None, source: Optiona
     if otype is None:
         return None
     return Observable(normalise(s, otype), otype, source)
+
+
+_INTERNAL_V4 = [ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+    "0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4")]
+
+
+def is_internal_ip(value: str) -> bool:
+    """True for private, loopback, link-local, CGNAT, multicast and reserved addresses."""
+    try:
+        ip = ipaddress.ip_address(value.strip("[]"))
+    except ValueError:
+        return False
+    if ip.version == 6:
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    return any(ip in n for n in _INTERNAL_V4)
 
 
 def is_public_ip(value: str) -> bool:
@@ -354,25 +421,30 @@ def find_iocs(text: str, include_private: bool = True) -> List[Tuple[int, int, O
         if m.group(0).count(":") >= 2 and len(m.group(0)) >= 6:
             add(m.start(), m.group(0), want=ObsType.IPV6)
     for m in _X_DOMAIN.finditer(text):
+        # CamelCase "TLDs" are code (Net.WebClient, System.IO), not domain names
+        if re.search(r"[a-z][A-Z]", m.group(0).rsplit(".", 1)[-1]):
+            continue
         add(m.start(), m.group(0), want=ObsType.DOMAIN)
     spans.sort(key=lambda x: x[0])
     return spans
 
 
-def defang_text(text: str, keep: Iterable[str] = ()) -> str:
+def defang_text(text: str, keep: Iterable[str] = (), style: str = "full") -> str:
     """Defang every IP, domain, URL and email address inside free text.
 
+    ``style="final"`` brackets the final dot only (SOC ticket style, see :func:`defang_final`).
     Values listed in ``keep`` (for example reference links) are left untouched."""
     if not text:
         return text
     keep = set(keep)
+    fn = defang_final if style == "final" else defang
     out, last = [], 0
     for start, end, o in find_iocs(text):
         raw = text[start:end]
         if raw in keep or o.type.is_hash:
             continue
         out.append(text[last:start])
-        out.append(defang(raw, o.type))
+        out.append(fn(raw, o.type))
         last = end
     out.append(text[last:])
     return "".join(out)

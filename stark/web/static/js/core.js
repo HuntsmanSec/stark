@@ -187,7 +187,7 @@ export const VERDICT_LABEL = { malicious: "Malicious", suspicious: "Suspicious",
 export function verdictPill(v) { v = v || "pending"; return h("span", { class: `pill ${v}` }, h("span", { class: "dot" }), VERDICT_LABEL[v] || v); }
 export const SEV_LABEL = { critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Info" };
 export const sevPill = (s) => h("span", { class: `pill sev-${s}` }, SEV_LABEL[s] || s);
-export const STATUS_LABEL = { open: "Open", in_progress: "In progress", contained: "Contained", closed: "Closed" };
+export const STATUS_LABEL = { open: "Open", in_progress: "In progress", on_hold: "On hold", contained: "Contained", resolved: "Resolved", closed: "Closed", cancelled: "Cancelled" };
 export const statusPill = (s) => h("span", { class: `pill st-${s}` }, STATUS_LABEL[s] || s);
 export const TYPE_LABEL = { ipv4: "IPv4", ipv6: "IPv6", domain: "Domain", url: "URL", md5: "MD5", sha1: "SHA-1", sha256: "SHA-256", email: "Email" };
 export const TYPE_ICON = { ipv4: "server", ipv6: "server", domain: "globe", url: "link", md5: "hash", sha1: "hash", sha256: "hash", email: "mail" };

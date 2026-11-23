@@ -13,8 +13,9 @@ Builds a structured technical incident report (Markdown) from a case:
 * 8. Actions taken
 * 9. IOCs & artifacts
 
-Indicators are **always defanged** (``185[.]220[.]101[.]1``, ``hxxps[://]evil[.]com``)
-and rendered as Markdown inline code. The report is built deterministically from
+Indicators are **always defanged** by bracketing the final dot (``185.220.101[.]1``,
+``hxxps://bad.example[.]com``; IPv6 and internal addresses are left as they are) and
+rendered as Markdown inline code. The report is built deterministically from
 case data. Analysts review and edit it before sharing.
 """
 
@@ -26,8 +27,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from .mitre import TACTIC_ORDER
-from .observables import defang as _defang
-from .observables import defang_text, detect_type
+from .observables import defang_final as _defang
+from .observables import defang_text as _defang_text
+from .observables import detect_type
+
+
+def defang_text(text: str, keep=()) -> str:
+    return _defang_text(text, keep=keep, style="final")
 
 SEVERITY_TEXT = {
     "critical": "Critical: confirmed compromise with significant business impact, or impact in progress",
@@ -114,9 +120,14 @@ _MD_LINK = re.compile(r"\]\((https?://[^)\s]+)\)")
 _SAFE_LINKS = re.compile(r"https?://attack\.mitre\.org/[^\s)|]*")
 
 
-def defang_markdown(md: str) -> str:
-    """Defang every indicator in a Markdown document, keeping link targets and MITRE references intact."""
-    keep = set(_MD_LINK.findall(md)) | set(_SAFE_LINKS.findall(md))
+_ALERT_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**(alert|incident) (url|link)\**:?\**\s*(https?://\S+)")
+
+
+def defang_markdown(md: str, keep=()) -> str:
+    """Defang every indicator in a Markdown document (final dot only), keeping link targets,
+    MITRE references and the alert link (which must stay live) intact."""
+    keep = set(keep) | set(_MD_LINK.findall(md)) | set(_SAFE_LINKS.findall(md)) | \
+        {m.group(3) for m in _ALERT_LINE.finditer(md)}
     return defang_text(md, keep=keep)
 
 
