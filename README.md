@@ -26,11 +26,12 @@ and double-click it (or run `stark` after installing with pip). Your browser ope
 - **Accounts and team workspaces**: everyone gets a personal workspace. Create a team, share the
   invite code, and teammates see each other's case changes live.
 - **Cases (triage)**: severity, status, TLP, assignee, notes, team discussion and an activity log,
-  with a four-step guide: *Arrange logs → Check indicators → Map ATT&CK → Write report*.
+  alert details (alert name, customer, Finding ID, alert link) and ticket fields, with a four-step
+  guide: *Arrange logs → Check indicators → Review ATT&CK → Write report*.
 - **Log Arranger**: drop in exports from Microsoft Sentinel, Defender, Splunk, Elastic, QRadar,
   LogRhythm, CrowdStrike, SentinelOne, Palo Alto, Fortinet, Cisco ASA, AWS/Azure/Cloudflare WAF,
   Zeek, Suricata, Windows event XML or any syslog/CEF/CSV/JSON. You get one clean UTC timeline
-  with extracted indicators, hosts, accounts, processes and suggested ATT&CK techniques.
+  with extracted indicators, hosts, accounts and processes.
   **Logs are never stored:** they're processed in memory, live only in your browser tab, and
   auto-purge after 30 minutes.
 - **Security finding analysis**: flags authentication anomalies (brute force, spraying, MFA
@@ -43,11 +44,16 @@ and double-click it (or run `stark` after installing with pip). Your browser ope
   cases it already appears in.
 - **Observables**: one-click reputation checks across every configured source. Sources that error
   or have no data are left out, so they never clutter an investigation.
-- **MITRE ATT&CK board**: map techniques by tactic, with evidence notes.
-- **Incident report writer**: a structured report with a **quick verdict and confidence level**,
-  executive summary, timeline, event details, analysis, interpretation, recommendations, actions
-  taken, and IOCs & artifacts. Indicators are rendered as Markdown `code` and **always defanged**
-  (`185[.]220[.]101[.]1`). Edit with live preview, then download or print to PDF.
+- **Automatic MITRE ATT&CK mapping**: techniques are mapped from the evidence (findings, arranged
+  logs, threat intelligence on the indicators, events, artifacts and the alert name), each with
+  what supports it. Remove what doesn't fit; it stays removed.
+- **SOC report writer**: correlates the logs, OSINT enrichment, past tickets, past closures and
+  client pentest notes, reaches a verdict and writes exactly one outcome: **append** to an open
+  ticket with the same entities, **close as non-threatening** (pentest to ignore, already
+  remediated, benign or misfire), or **raise an incident** (analyst-only assessment plus a customer
+  report). Unannounced pentests never reach the customer. A detailed technical report is also
+  available. Indicators are Markdown `code` and **always defanged** on the final dot
+  (`hxxps://bad.example[.]com`, `185.220.101[.]1`), while the alert link stays live.
 - **Guided setup**: right after sign-up, connect your API keys (with a one-click key test) before
   opening the first case.
 - **Exports**: report, STIX 2.1, CSV, IRFlow Timeline IOC list, VESTIGEX sweep list, hash set.

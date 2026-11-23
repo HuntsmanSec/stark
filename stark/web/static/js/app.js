@@ -181,6 +181,9 @@ export function newCaseDialog(prefill = {}) {
     "Web application attack", "Denial of service", "Insider threat", "Policy violation", "Other"].map((c) => h("option", { value: c }, c || "Not sure yet")));
   const tlp = h("select", { class: "input" }, ["clear", "green", "amber", "amber+strict", "red"].map((t) => h("option", { value: t, selected: t === "amber" }, `TLP:${t.toUpperCase()}`)));
   const desc = h("textarea", { class: "input", rows: 4, placeholder: "What was reported, by whom, and what do you know so far? (optional)" });
+  const fld = (ph, v = "") => h("input", { class: "input", placeholder: ph, value: v });
+  const alertName = fld("e.g. Password spray against Entra ID", prefill.alert_name), customer = fld("Client name", prefill.customer || ""),
+    findingId = fld("Finding ID from the SIEM / Fusion"), alertUrl = fld("https://security.microsoft.com/…"), siem = fld("e.g. Microsoft Sentinel, Splunk, QRadar");
   const submit = h("button", { class: "btn primary" }, icon("plus"), "Open case");
   const noKeys = state.ws && !state.ws.keys_configured;
   const m = modal({ title: "Open a new case", subtitle: `In ${state.ws.name}. You can change everything later.`,
@@ -189,13 +192,20 @@ export function newCaseDialog(prefill = {}) {
       h("div", { class: "field" }, h("label", null, "Severity"), sev), h("div", { class: "field" }, h("label", null, "Type of incident"), cls),
       h("div", { class: "field" }, h("label", null, "Sharing (TLP)"), tlp, h("div", { class: "hint" }, "Controls how widely the report may be shared.")),
       h("div", { class: "field full" }, h("label", null, "Initial notes"), desc),
+      h("details", { class: "full" }, h("summary", { class: "small", style: { cursor: "pointer" } }, "Alert details (MSSP / SOC triage, optional)"),
+        h("div", { class: "form-grid mt-8" },
+          h("div", { class: "field" }, h("label", null, "Alert name"), alertName), h("div", { class: "field" }, h("label", null, "Customer"), customer),
+          h("div", { class: "field" }, h("label", null, "Finding ID"), findingId), h("div", { class: "field" }, h("label", null, "Log source / SIEM"), siem),
+          h("div", { class: "field full" }, h("label", null, "Alert link"), alertUrl),
+          h("div", { class: "hint full" }, "With an alert name and customer, the report writer checks past tickets, closures and pentest notes for the same alert and decides whether to append, close or raise an incident."))),
       noKeys ? h("div", { class: "full notice warn" }, icon("key"), h("div", { class: "small" }, h("b", null, "No intelligence sources connected yet"),
         "Indicators can only be checked against keyless sources. ", h("a", { href: "/setup", "data-link": true, onclick: () => m.close() }, "Connect API keys first"), " (takes a minute).")) : null),
     foot: [h("button", { class: "btn", onclick: () => m.close() }, "Cancel"), submit] });
   submit.onclick = async () => {
     busy(submit, true);
     try {
-      const c = await api("POST", `/workspaces/${state.ws.id}/cases`, { title: title.value, severity: sev.value, classification: cls.value, tlp: tlp.value, description: desc.value });
+      const c = await api("POST", `/workspaces/${state.ws.id}/cases`, { title: title.value, severity: sev.value, classification: cls.value, tlp: tlp.value, description: desc.value,
+        alert_name: alertName.value, customer: customer.value, finding_id: findingId.value, alert_url: alertUrl.value, siem: siem.value });
       m.close(); toast(`${c.ref} opened`); go(`/cases/${c.id}?tab=logs`);
     } catch (e) { fail(e); busy(submit, false); }
   };
@@ -272,7 +282,7 @@ async function renderCases(r) {
   const load = async () => {
     try {
       const rows = await api("GET", `/workspaces/${state.ws.id}/cases?status=${status}&q=${encodeURIComponent(search.value.trim())}`);
-      mount(filters, [["active", "Active"], ["open", "Open"], ["in_progress", "In progress"], ["contained", "Contained"], ["closed", "Closed"], ["all", "All"]].map(([k, l]) =>
+      mount(filters, [["active", "Active"], ["open", "Open"], ["in_progress", "In progress"], ["on_hold", "On hold"], ["contained", "Contained"], ["resolved", "Resolved"], ["closed", "Closed"], ["all", "All"]].map(([k, l]) =>
         h("button", { class: `chip-btn${status === k ? " on" : ""}`, onclick: () => { status = k; load(); } }, l)));
       mount(list, rows.length ? h("div", { class: "card table-wrap" }, caseTable(rows)) :
         h("div", { class: "card" }, search.value ? empty("search", "No matching cases", "Try another search or filter.") :

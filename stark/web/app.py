@@ -32,7 +32,12 @@ SESSION_DAYS = 14
 MAX_UPLOAD_MB = 64
 
 SEVERITIES = ["info", "low", "medium", "high", "critical"]
-STATUSES = ["open", "in_progress", "contained", "closed"]
+STATUSES = ["open", "in_progress", "on_hold", "contained", "resolved", "closed", "cancelled"]
+CLOSED_STATUSES = ("resolved", "closed", "cancelled")
+DISPOSITIONS = ["", "incident", "appended", "non_threatening"]
+INSTRUCTIONS = ["ignore", "raise_and_confirm", "unannounced"]
+ALERT_FIELDS = (("ticket_number", 80), ("finding_id", 120), ("alert_name", 300), ("customer", 200), ("alert_url", 2000),
+                ("siem", 80), ("alert_created", 60), ("threat_id", 200), ("close_notes", 20000))
 TLPS = ["clear", "green", "amber", "amber+strict", "red"]
 VERDICTS = ["", "true_positive", "likely_malicious", "suspicious", "benign", "false_positive", "inconclusive"]
 CONFIDENCES = ["", "high", "medium", "low"]
@@ -433,15 +438,16 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         args: List[Any] = [ws_id]
         status = request.args.get("status")
         if status == "active":
-            sql += " AND c.status<>'closed'"
+            sql += " AND c.status NOT IN ('closed','resolved','cancelled')"
         elif status in STATUSES:
             sql += " AND c.status=?"
             args.append(status)
         q = (request.args.get("q") or "").strip()
         if q:
-            sql += (" AND (c.title LIKE ? OR c.ref LIKE ? OR c.description LIKE ? OR EXISTS (SELECT 1 FROM observables o"
+            sql += (" AND (c.title LIKE ? OR c.ref LIKE ? OR c.description LIKE ? OR c.ticket_number LIKE ? OR c.finding_id LIKE ?"
+                    " OR c.alert_name LIKE ? OR c.customer LIKE ? OR EXISTS (SELECT 1 FROM observables o"
                     " WHERE o.case_id=c.id AND o.value LIKE ?))")
-            args += [f"%{q}%"] * 4
+            args += [f"%{q}%"] * 8
         sql += " ORDER BY c.updated_at DESC LIMIT 500"
         return jsonify([case_row(c) for c in db.q(sql, args)])
 
@@ -460,6 +466,9 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                    " assignee_id, created_by, created_at, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    (ws_id, db.next_ref(ws_id), title, (d.get("description") or "")[:20000], sev, "open", tlp,
                     (d.get("classification") or "")[:80], g.user["id"], g.user["id"], now, now, g.user["id"]))
+        for f, limit in ALERT_FIELDS:
+            if isinstance(d.get(f), str) and d[f].strip():
+                db.x(f"UPDATE cases SET {f}=? WHERE id=?", (d[f].strip()[:limit], cid))
         c = db.one("SELECT * FROM cases WHERE id=?", (cid,))
         db.log(ws_id, g.user["id"], f"opened case {c['ref']}: {title}", cid)
         return jsonify(case_row(c)), 201
@@ -472,7 +481,6 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
              "results": _j(o["results"])}
             for o in db.q("SELECT * FROM observables WHERE case_id=? ORDER BY created_at, id", (cid,))]
         out["artifacts"] = db.q("SELECT * FROM artifacts WHERE case_id=? ORDER BY kind, created_at", (cid,))
-        out["techniques"] = db.q("SELECT * FROM techniques WHERE case_id=? ORDER BY technique_id", (cid,))
         out["events"] = db.q("SELECT e.*, u.name AS added_by_name FROM events e LEFT JOIN users u ON u.id=e.added_by "
                              "WHERE case_id=? ORDER BY time, id", (cid,))
         out["actions"] = db.q("SELECT a.*, u.name AS added_by_name FROM actions a LEFT JOIN users u ON "
@@ -484,6 +492,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
              "extra": _j(f["extra"], {})}
             for f in db.q("SELECT * FROM findings WHERE case_id=? ORDER BY CASE severity WHEN 'critical' THEN 0 "
                           "WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, id", (cid,))]
+        out["linked_findings"] = _j(c.get("linked_findings"))
+        out["techniques"], out["techniques_hidden"] = case_techniques(out)
         out["activity"] = db.q("SELECT a.*, u.name AS user_name FROM activity a LEFT JOIN users u ON u.id=a.user_id "
                                "WHERE case_id=? ORDER BY created_at DESC LIMIT 100", (cid,))
         out["members"] = db.q("SELECT u.id, u.name FROM memberships m JOIN users u ON u.id=m.user_id "
@@ -496,6 +506,32 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         from ..report import assess
         out["assessment"] = assess(out)
         return out
+
+    def case_techniques(case: Dict[str, Any]):
+        """Stored techniques (manual / from logs) merged with the ones mapped automatically
+        from the case evidence. Techniques the analyst removed stay hidden."""
+        rows = db.q("SELECT * FROM techniques WHERE case_id=? ORDER BY technique_id", (case["id"],))
+        hidden = sorted(r["technique_id"] for r in rows if r.get("suppressed"))
+        merged: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            if r.get("suppressed"):
+                continue
+            basis = _j(r.get("basis"))
+            merged[r["technique_id"]] = {**r, "basis": basis, "auto": (r.get("source") or "manual") != "manual",
+                                         "sources": [r.get("source") or "manual"]}
+        for t in mitre_mod.auto_map(case):
+            if t["id"] in hidden:
+                continue
+            if t["id"] in merged:
+                m = merged[t["id"]]
+                m["basis"] = list(dict.fromkeys(m["basis"] + t["basis"]))[:8]
+                m["sources"] = sorted(set(m["sources"]) | set(t["sources"]))
+                continue
+            merged[t["id"]] = {"id": None, "case_id": case["id"], "technique_id": t["id"], "name": t["name"],
+                               "tactic": t["tactic"], "note": "", "source": "auto", "auto": True,
+                               "basis": t["basis"], "sources": t["sources"]}
+        out = sorted(merged.values(), key=lambda t: (mitre_mod.TACTIC_ORDER.get(t["tactic"], 99), t["technique_id"]))
+        return out, [mitre_mod.technique(h) for h in hidden]
 
     @app.get("/api/cases/<int:case_id>")
     @login_required
@@ -524,8 +560,18 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                 sets.append(f"{f}=?")
                 args.append(d[f])
                 notes.append(f"{f} → {d[f].replace('_', ' ')}")
+        if "disposition" in d and d["disposition"] in DISPOSITIONS and d["disposition"] != (c.get("disposition") or ""):
+            sets.append("disposition=?")
+            args.append(d["disposition"])
+            notes.append(f"disposition → {d['disposition'].replace('_', ' ') or 'none'}")
+        if "status" in d and d["status"] in CLOSED_STATUSES and c["status"] not in CLOSED_STATUSES:
+            sets += ["closed_by=?", "closed_at=?"]
+            args += [g.user["id"], time.time()]
+        if isinstance(d.get("linked_findings"), list):
+            sets.append("linked_findings=?")
+            args.append(json.dumps([str(x).strip()[:120] for x in d["linked_findings"] if str(x).strip()][:500]))
         for f, limit in (("title", 200), ("description", 20000), ("classification", 80), ("incident_start", 40),
-                         ("incident_end", 40)):
+                         ("incident_end", 40)) + ALERT_FIELDS:
             if f in d and isinstance(d[f], str):
                 sets.append(f"{f}=?")
                 args.append(d[f][:limit])
@@ -542,7 +588,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         if "report_md" in d and isinstance(d["report_md"], str):
             sets += ["report_md=?", "report_updated_at=?"]
             from ..report import defang_markdown
-            args += [defang_markdown(d["report_md"][:1_000_000]), time.time()]
+            keep = [x for x in (d.get("alert_url"), c.get("alert_url")) if x]
+            args += [defang_markdown(d["report_md"][:1_000_000], keep=keep), time.time()]
             notes.append("saved the report")
         if sets:
             db.x(f"UPDATE cases SET {', '.join(sets)} WHERE id=?", (*args, case_id))
@@ -721,14 +768,90 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         n = 0
         for it in items[:200]:
             tid = str(it.get("technique_id") or it.get("id") or "").strip().upper()
-            if not tid.startswith("T"):
+            if not re.match(r"^T\d{4}(\.\d{3})?$", tid):
                 continue
             t = mitre_mod.technique(tid)
-            n += db.ins("INSERT OR IGNORE INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at)"
-                      " VALUES (?,?,?,?,?,?,?)", (case_id, t["id"], t["name"], t["tactic"],
-                                                  str(it.get("note") or "")[:2000], g.user["id"], now))
+            # Adding a technique by hand brings back one the analyst had hidden.
+            db.x("DELETE FROM techniques WHERE case_id=? AND technique_id=? AND suppressed=1", (case_id, tid))
+            n += db.ins("INSERT OR IGNORE INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at,"
+                        " source) VALUES (?,?,?,?,?,?,?,?)", (case_id, t["id"], t["name"], t["tactic"],
+                                                             str(it.get("note") or "")[:2000], g.user["id"], now,
+                                                             "auto" if it.get("source") == "auto" else "manual"))
+            if it.get("note") and not n:
+                db.x("UPDATE techniques SET note=? WHERE case_id=? AND technique_id=?", (str(it["note"])[:2000], case_id, tid))
         if n:
             changed(c, f"mapped {n} ATT&CK technique(s) in {c['ref']}")
+        else:
+            changed(c)
+        return jsonify(full_case(get_case(case_id)))
+
+    @app.post("/api/cases/<int:case_id>/techniques/from-logs")
+    @login_required
+    def techniques_from_logs(case_id):
+        """Automatic mapping from the Log Arranger. Only the technique, a hit count, the log
+        sources and one short example line are kept; the logs themselves are not."""
+        c = get_case(case_id)
+        d = body()
+        products = [str(p)[:60] for p in (d.get("products") or [])][:10]
+        hidden = {r["technique_id"] for r in db.q("SELECT technique_id FROM techniques WHERE case_id=? AND suppressed=1",
+                                                   (case_id,))}
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for it in (d.get("items") or [])[:300]:
+            tid = str(it.get("technique_id") or "").strip().upper()
+            if not re.match(r"^T\d{4}(\.\d{3})?$", tid) or tid in hidden:
+                continue
+            gr = grouped.setdefault(tid, {"strong": False, "basis": []})
+            if it.get("finding"):
+                gr["strong"] = True
+                gr["basis"].append(f"Log Arranger finding: {str(it['finding'])[:200]}")
+            elif tid not in mitre_mod.WEAK:
+                gr["strong"] = True
+                ex = str(it.get("example") or "")[:200]
+                gr["basis"].append(f"{int(it.get('count') or 0)} matching log event(s) in {', '.join(products) or 'the logs'}"
+                                   + (f", e.g. {ex}" if ex else ""))
+        now = time.time()
+        added = 0
+        for tid, gr in grouped.items():
+            if not gr["strong"]:
+                continue
+            t = mitre_mod.technique(tid)
+            basis = list(dict.fromkeys(gr["basis"]))[:4]
+            existing = db.one("SELECT id, basis FROM techniques WHERE case_id=? AND technique_id=?", (case_id, tid))
+            if existing:
+                merged = list(dict.fromkeys(_j(existing["basis"]) + basis))[:8]
+                db.x("UPDATE techniques SET basis=? WHERE id=?", (json.dumps(merged), existing["id"]))
+                continue
+            added += db.ins("INSERT OR IGNORE INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at,"
+                            " source, basis) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (case_id, t["id"], t["name"], t["tactic"], "", g.user["id"], now, "logs", json.dumps(basis)))
+        if added:
+            changed(c, f"automatically mapped {added} ATT&CK technique(s) from logs in {c['ref']}")
+        return jsonify({"added": added, "case": full_case(get_case(case_id))})
+
+    @app.post("/api/cases/<int:case_id>/techniques/hide")
+    @login_required
+    def hide_technique(case_id):
+        c = get_case(case_id)
+        tid = str(body().get("technique_id") or "").strip().upper()
+        if not re.match(r"^T\d{4}(\.\d{3})?$", tid):
+            raise ApiError(400, "Unknown technique")
+        t = mitre_mod.technique(tid)
+        if db.one("SELECT id FROM techniques WHERE case_id=? AND technique_id=?", (case_id, tid)):
+            db.x("UPDATE techniques SET suppressed=1 WHERE case_id=? AND technique_id=?", (case_id, tid))
+        else:
+            db.x("INSERT INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at, source, suppressed)"
+                 " VALUES (?,?,?,?,?,?,?,?,1)", (case_id, t["id"], t["name"], t["tactic"], "", g.user["id"], time.time(), "auto"))
+        changed(c, f"removed ATT&CK technique {tid} from {c['ref']}")
+        return jsonify(full_case(get_case(case_id)))
+
+    @app.post("/api/cases/<int:case_id>/techniques/restore")
+    @login_required
+    def restore_technique(case_id):
+        c = get_case(case_id)
+        tid = str(body().get("technique_id") or "").strip().upper()
+        db.x("UPDATE techniques SET suppressed=0 WHERE case_id=? AND technique_id=? AND source<>'auto'", (case_id, tid))
+        db.x("DELETE FROM techniques WHERE case_id=? AND technique_id=? AND suppressed=1", (case_id, tid))
+        changed(c, f"restored ATT&CK technique {tid} in {c['ref']}")
         return jsonify(full_case(get_case(case_id)))
 
     @app.patch("/api/cases/<int:case_id>/techniques/<int:rid>")
@@ -742,7 +865,10 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
     @app.delete("/api/cases/<int:case_id>/techniques/<int:rid>")
     @login_required
     def del_technique(case_id, rid):
-        return _child_delete("techniques", case_id, rid)
+        c = get_case(case_id)
+        db.x("UPDATE techniques SET suppressed=1 WHERE id=? AND case_id=?", (rid, case_id))
+        changed(c)
+        return jsonify(full_case(get_case(case_id)))
 
     @app.post("/api/cases/<int:case_id>/events")
     @login_required
@@ -792,12 +918,217 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         return jsonify(full_case(get_case(case_id)))
 
     # ------------------------------------------------------------ report
+    # ------------------------------------------------- related SOC records
+    STATUS_MAP = {"open": "NEW", "in_progress": "IN_PROGRESS", "on_hold": "ON_HOLD", "contained": "IN_PROGRESS",
+                  "resolved": "RESOLVED", "closed": "CLOSED", "cancelled": "CANCELLED"}
+
+    def _case_values(cid: int) -> List[str]:
+        vals = [r["value"] for r in db.q("SELECT value FROM observables WHERE case_id=?", (cid,))]
+        vals += [r["value"] for r in db.q("SELECT value FROM artifacts WHERE case_id=?", (cid,))]
+        for f in db.q("SELECT entities FROM findings WHERE case_id=? AND status<>'dismissed'", (cid,)):
+            for vs in _j(f["entities"], {}).values():
+                vals += [str(v) for v in vs or []]
+        return list(dict.fromkeys(vals))[:2000]
+
+    def related_records(c: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        """Past tickets / closures for the same alert name and customer, imported records,
+        and the customer's pentest notes. Same alert name alone is never a match: the
+        engine still requires an exact shared entity."""
+        from ..soc import iso, normalise_record
+        alert = (c.get("alert_name") or "").strip().lower()
+        cust = (c.get("customer") or "").strip().lower()
+        if alert:
+            others = db.q("SELECT * FROM cases WHERE workspace_id=? AND id<>? AND lower(alert_name)=? "
+                          "ORDER BY updated_at DESC LIMIT 200", (c["workspace_id"], c["id"], alert))
+        else:
+            mine = [v.lower() for v in _case_values(c["id"])][:500]
+            others = []
+            if mine:
+                ph = ",".join("?" * len(mine))
+                others = db.q(f"SELECT DISTINCT c.* FROM cases c WHERE c.workspace_id=? AND c.id<>? AND (EXISTS (SELECT 1 FROM "
+                              f"observables o WHERE o.case_id=c.id AND lower(o.value) IN ({ph})) OR EXISTS (SELECT 1 FROM "
+                              f"artifacts a WHERE a.case_id=c.id AND lower(a.value) IN ({ph}))) ORDER BY c.updated_at DESC LIMIT 100",
+                              (c["workspace_id"], c["id"], *mine, *mine))
+        if cust:
+            others = [o for o in others if not (o.get("customer") or "").strip() or o["customer"].strip().lower() == cust]
+        names = {u["id"]: u["name"] for u in db.q("SELECT u.id, u.name FROM users u JOIN memberships m ON m.user_id=u.id "
+                                                  "WHERE m.workspace_id=?", (c["workspace_id"],))}
+        fid = (c.get("finding_id") or "").strip()
+        tickets: Dict[str, Dict[str, Any]] = {}
+        closures = []
+        for o in others:
+            if o.get("disposition") == "non_threatening":
+                closures.append({"finding_id": o.get("finding_id") or o["ref"], "detail": o.get("description") or o["title"],
+                                 "closure_note": o.get("close_notes") or "", "closed_by": names.get(o.get("closed_by")) or
+                                 names.get(o.get("updated_by")) or "", "closed_on": iso(o.get("closed_at") or o["updated_at"]),
+                                 "artifacts": _case_values(o["id"]), "source": "workspace", "case_id": o["id"],
+                                 "ref": o["ref"]})
+                continue
+            number = (o.get("ticket_number") or "").strip() or o["ref"]
+            linked = [str(x) for x in _j(o.get("linked_findings"))] + ([o["finding_id"]] if o.get("finding_id") else [])
+            comments = db.q("SELECT body FROM comments WHERE case_id=? ORDER BY created_at", (o["id"],))
+            rec = {"case_number": number, "status": STATUS_MAP.get(o["status"], o["status"].upper()), "subject": o["title"],
+                   "description": o.get("description") or "", "notes": "\n".join(x["body"] for x in comments),
+                   "close_notes": o.get("close_notes") or "", "created_on": iso(o["created_at"]),
+                   "updated_on": iso(o["updated_at"]), "findings": linked,
+                   "involves_current_finding": bool(fid and fid in linked), "artifacts": _case_values(o["id"]),
+                   "source": "workspace", "case_id": o["id"], "ref": o["ref"]}
+            prev = tickets.get(number.lower())
+            if prev:  # findings appended to the same INC: merge them into one ticket
+                prev["findings"] = list(dict.fromkeys(prev["findings"] + linked))
+                prev["artifacts"] = list(dict.fromkeys(prev["artifacts"] + rec["artifacts"]))
+                prev["involves_current_finding"] = prev["involves_current_finding"] or rec["involves_current_finding"]
+                if o.get("disposition") == "incident" or rec["close_notes"]:
+                    for k in ("status", "subject", "description", "notes", "close_notes", "updated_on", "case_id", "ref"):
+                        prev[k] = rec[k] or prev[k]
+            else:
+                tickets[number.lower()] = rec
+        out = {"tickets": list(tickets.values()), "closures": closures, "pentests": []}
+        for r in db.q("SELECT * FROM case_context WHERE case_id=? ORDER BY created_at", (c["id"],)):
+            kind, rec = normalise_record(_j(r["data"], {}))
+            rec["context_id"] = r["id"]
+            rec["source"] = "imported"
+            out["tickets" if kind == "ticket" else "closures" if kind == "closure" else "pentests"].append(rec)
+        for n in db.q("SELECT * FROM pentest_notes WHERE workspace_id=? ORDER BY created_at DESC", (c["workspace_id"],)):
+            if cust and (n.get("customer") or "").strip() and n["customer"].strip().lower() != cust:
+                continue
+            out["pentests"].append({"id": n["id"], "title": n["title"], "details": n["details"] or "",
+                                    "tester_ips": _j(n["tester_ips"]), "hosts": _j(n["hosts"]),
+                                    "starts_on": n["starts_on"] or "", "ends_on": n["ends_on"] or "",
+                                    "client_instruction": n["client_instruction"] or "raise_and_confirm",
+                                    "customer": n["customer"] or "", "source": "workspace"})
+        return out
+
+    def _with_assets(c: Dict[str, Any]) -> Dict[str, Any]:
+        hosts = {str(a["value"]).lower().split(".")[0] for a in c["artifacts"] if a["kind"] == "host"}
+        for f in c["findings"]:
+            hosts |= {str(h).lower().split(".")[0] for h in (f.get("entities") or {}).get("hosts", [])}
+        crit, matched = [], False
+        if hosts:
+            for a in db.q("SELECT hostname, criticality FROM assets WHERE workspace_id=?", (c["workspace_id"],)):
+                if (a["hostname"] or "").lower().split(".")[0] in hosts:
+                    matched = True
+                    if (a["criticality"] or "").lower() in ("high", "critical", "tier0", "tier 0", "crown jewel"):
+                        crit.append(a["hostname"])
+        return {**c, "critical_assets": crit, "assets_matched": matched}
+
+    @app.get("/api/cases/<int:case_id>/context")
+    @login_required
+    def case_context(case_id):
+        from ..soc import write
+        c = full_case(get_case(case_id))
+        rel = related_records(c)
+        res = write(_with_assets(c), rel["tickets"], rel["closures"], rel["pentests"])
+        return jsonify({"records": rel, "analysis": {k: res[k] for k in ("outcome", "outcome_label", "reason", "verdict",
+                                                                         "target", "related", "signs")}})
+
+    @app.post("/api/cases/<int:case_id>/context")
+    @login_required
+    def add_context(case_id):
+        """Import past tickets, Fusion closures or pentest notes (JSON) for this case."""
+        from ..soc import normalise_record
+        c = get_case(case_id)
+        d = body()
+        raw = d.get("records")
+        if raw is None and d.get("text"):
+            try:
+                raw = json.loads(str(d["text"]))
+            except ValueError:
+                raise ApiError(400, "That isn't valid JSON. Paste one record, a list of records, or an object with a list.")
+        if isinstance(raw, dict):
+            lists = [v for v in raw.values() if isinstance(v, list)]
+            raw = [x for lst in lists for x in lst] if lists and not raw.get("_type") else [raw]
+        if not isinstance(raw, list):
+            raise ApiError(400, "Nothing to import")
+        n = 0
+        kinds: Dict[str, int] = defaultdict(int)
+        for rec in raw[:500]:
+            if not isinstance(rec, dict):
+                continue
+            kind, _ = normalise_record(rec)
+            db.x("INSERT INTO case_context (case_id, kind, data, added_by, created_at) VALUES (?,?,?,?,?)",
+                 (case_id, kind, json.dumps(rec)[:200000], g.user["id"], time.time()))
+            kinds[kind] += 1
+            n += 1
+        if n:
+            changed(c, f"imported {n} related record(s) into {c['ref']}")
+        return jsonify({"imported": n, "kinds": kinds})
+
+    @app.delete("/api/cases/<int:case_id>/context/<int:rid>")
+    @login_required
+    def del_context(case_id, rid):
+        c = get_case(case_id)
+        db.x("DELETE FROM case_context WHERE id=? AND case_id=?", (rid, case_id))
+        changed(c)
+        return jsonify({"ok": True})
+
+    # ------------------------------------------------------ pentest notes
+    def _pentest_cols(d: Dict[str, Any]) -> Dict[str, Any]:
+        def lst(v):
+            if isinstance(v, str):
+                v = re.split(r"[\s,;]+", v)
+            return [str(x).strip()[:100] for x in (v or []) if str(x).strip()][:500]
+        instr = d.get("client_instruction") if d.get("client_instruction") in INSTRUCTIONS else "raise_and_confirm"
+        return {"customer": str(d.get("customer") or "").strip()[:200], "title": str(d.get("title") or "").strip()[:300],
+                "details": str(d.get("details") or "")[:20000], "tester_ips": json.dumps(lst(d.get("tester_ips"))),
+                "hosts": json.dumps(lst(d.get("hosts"))), "starts_on": str(d.get("starts_on") or "").strip()[:40],
+                "ends_on": str(d.get("ends_on") or "").strip()[:40], "client_instruction": instr}
+
+    def _pentest_out(n: Dict[str, Any]) -> Dict[str, Any]:
+        return {**n, "tester_ips": _j(n["tester_ips"]), "hosts": _j(n["hosts"])}
+
+    @app.get("/api/workspaces/<int:ws_id>/pentests")
+    @login_required
+    def list_pentests(ws_id):
+        membership(ws_id)
+        return jsonify([_pentest_out(n) for n in db.q("SELECT * FROM pentest_notes WHERE workspace_id=? ORDER BY "
+                                                      "created_at DESC", (ws_id,))])
+
+    @app.post("/api/workspaces/<int:ws_id>/pentests")
+    @login_required
+    def add_pentest(ws_id):
+        membership(ws_id)
+        cols = _pentest_cols(body())
+        if not cols["title"]:
+            raise ApiError(400, "Give the pentest note a title")
+        now = time.time()
+        db.x("INSERT INTO pentest_notes (workspace_id, customer, title, details, tester_ips, hosts, starts_on, ends_on, "
+             "client_instruction, added_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+             (ws_id, *cols.values(), g.user["id"], now, now))
+        db.log(ws_id, g.user["id"], f"added pentest note: {cols['title']}")
+        return list_pentests(ws_id)
+
+    @app.put("/api/workspaces/<int:ws_id>/pentests/<int:pid>")
+    @login_required
+    def update_pentest(ws_id, pid):
+        membership(ws_id)
+        cols = _pentest_cols(body())
+        if not cols["title"]:
+            raise ApiError(400, "Give the pentest note a title")
+        db.x("UPDATE pentest_notes SET customer=?, title=?, details=?, tester_ips=?, hosts=?, starts_on=?, ends_on=?, "
+             "client_instruction=?, updated_at=? WHERE id=? AND workspace_id=?", (*cols.values(), time.time(), pid, ws_id))
+        return list_pentests(ws_id)
+
+    @app.delete("/api/workspaces/<int:ws_id>/pentests/<int:pid>")
+    @login_required
+    def delete_pentest(ws_id, pid):
+        membership(ws_id)
+        db.x("DELETE FROM pentest_notes WHERE id=? AND workspace_id=?", (pid, ws_id))
+        return list_pentests(ws_id)
+
     @app.post("/api/cases/<int:case_id>/report/generate")
     @login_required
     def gen_report(case_id):
-        from ..report import generate
         c = full_case(get_case(case_id))
-        return jsonify({"markdown": generate(c, author=g.user["name"])})
+        d = body()
+        if d.get("template") == "technical":
+            from ..report import generate
+            return jsonify({"markdown": generate(c, author=g.user["name"]), "template": "technical"})
+        from ..soc import write
+        rel = related_records(c)
+        force = d.get("outcome") if d.get("outcome") in (1, 2, 3) else None
+        res = write(_with_assets(c), rel["tickets"], rel["closures"], rel["pentests"], force=force)
+        return jsonify({**res, "template": "soc"})
 
     @app.get("/api/cases/<int:case_id>/export/<fmt>")
     @login_required
@@ -894,13 +1225,6 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
                  json.dumps({k: f[k] for k in ("decoded", "decoded_iocs", "countries", "impersonates", "technique",
                                                "interval_seconds", "jitter", "tools") if k in f})[:20000],
                  int(f.get("count") or 0), f.get("first"), f.get("last"), g.user["id"], now))
-            for t in f.get("mitre") or []:  # map the finding's techniques into the case automatically
-                tid = t.get("id") if isinstance(t, dict) else str(t)
-                if tid:
-                    tt = mitre_mod.technique(tid)
-                    db.ins("INSERT OR IGNORE INTO techniques (case_id, technique_id, name, tactic, note, added_by, created_at)"
-                           " VALUES (?,?,?,?,?,?,?)", (case_id, tt["id"], tt["name"], tt["tactic"],
-                                                       f"From finding: {str(f['title'])[:200]}", g.user["id"], now))
         if n:
             changed(c, f"added {n} security finding(s) to {c['ref']}")
         return jsonify(full_case(get_case(case_id)))

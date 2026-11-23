@@ -97,7 +97,9 @@ def _evidence_line(r: Row) -> Dict[str, str]:
         flow = f"{r.get('src_ip') or '?'}{':' + str(r['src_port']) if r.get('src_port') else ''} -> " \
                f"{r.get('dst_ip') or '?'}{':' + str(r['dst_port']) if r.get('dst_port') else ''}"
     return {"time": r.get("time") or "", "product": r.get("product") or "", "event": str(r.get("event") or "")[:120],
-            "host": r.get("host") or "", "user": r.get("user") or "", "flow": flow, "detail": str(detail)[:400]}
+            "host": r.get("host") or "", "user": r.get("user") or "", "flow": flow, "detail": str(detail)[:400],
+            "action": str(r.get("action") or "")[:60], "src_ip": r.get("src_ip") or "", "dst_ip": r.get("dst_ip") or "",
+            "country": r.get("country") or ""}
 
 
 # =========================================================================== auth

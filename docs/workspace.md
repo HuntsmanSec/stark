@@ -43,7 +43,10 @@ opinion, and the cases it already appears in. *Add to case* puts it into an open
 
 ## Working a case
 
-1. **Open a case**: title, severity, incident type and TLP.
+1. **Open a case**: title, severity, incident type and TLP. For SOC / MSSP triage, also fill in the
+   **alert details** (alert name, customer, Finding ID, log source / SIEM, alert link). You can add
+   or change them later in *Overview → Alert & ticket*, together with the ticket (INC) number, the
+   disposition, the Finding IDs in the ticket and the close notes.
 2. **Log Arranger**: drop in exports from any mix of tools. You get one timeline sorted by time,
    with source, event, host/user, network flow, action and details. Then:
    - filter by source, severity or free text, or show only rows that contain indicators
@@ -51,7 +54,8 @@ opinion, and the cases it already appears in. *Add to case* puts it into an open
    - **pin** important rows to the case timeline
    - add extracted **indicators** (private IPs are unticked) and optionally check them straight away
    - add **hosts, accounts, processes and command lines** as artifacts
-   - review and add **suggested ATT&CK techniques** (with the evidence that matched)
+   - **ATT&CK techniques are mapped automatically** from what the logs show (see step 5). Context-only
+     patterns, such as an ordinary successful logon, are listed for you to add by hand
    - review the **security findings**: S.T.A.R.K analyses the arranged logs for
      - *authentication anomalies*: brute force, success after failures, password spraying, MFA
        failures/fatigue, impossible travel, many countries, unusual devices/user agents, legacy or
@@ -68,7 +72,7 @@ opinion, and the cases it already appears in. *Add to case* puts it into an open
 
      Each finding shows what was seen, an interpretation, a recommended action, severity and
      confidence, entities, ATT&CK techniques and the evidence rows (*Show events*). *Add to case*
-     keeps it, and its techniques are mapped automatically.
+     keeps it.
    - **investigate**: click a host, user or IP anywhere in the timeline to pivot; open a row for
      *Related activity* (±15/60 minutes across all sources, or the same host/user); filter by time
      range; use the **Assets** tab to look up an IP, hostname or MAC in the logs and the inventory.
@@ -76,28 +80,108 @@ opinion, and the cases it already appears in. *Add to case* puts it into an open
    the verdict and the report.
 4. **Observables**: check reputation across all configured sources, read per-source results, add
    notes or override a verdict.
-5. **ATT&CK**: the attack chain, grouped by tactic, with evidence notes.
-6. **Timeline & actions**: key events and every response action you take.
-7. **Overview → Quick verdict**: an automatic verdict (true positive, likely malicious,
+5. **ATT&CK**: the attack chain, grouped by tactic, **mapped automatically** from the evidence:
+   - security findings (from the Log Arranger or added to the case)
+   - the logs you arrange: behaviour patterns with a clear meaning (PowerShell, LOLBins,
+     credential dumping, shadow-copy deletion and so on). Only the technique, a hit count, the log
+     sources and one short example line are kept
+   - threat intelligence on the case indicators (for example a C2, phishing or brute-force
+     classification from a source that rates the indicator malicious), and look-alike domains
+   - pinned timeline events, recorded processes / command lines / files, and the alert name
+
+   Each technique is tagged *Auto* and lists what supports it. Remove one that doesn't fit and it
+   stays removed (re-arranging the same logs won't bring it back); restore it from *Removed by an
+   analyst*. You can still add any technique by hand.
+6. **Related**: past tickets, past closures and client pentest notes for this alert (see
+   [SOC write-ups](#soc-write-ups-append-close-or-raise)), with the entities each one shares with
+   this case and the decision they lead to. Import records from your ticketing system as JSON.
+7. **Timeline & actions**: key events and every response action you take.
+8. **Overview → Quick verdict**: an automatic verdict (true positive, likely malicious,
    suspicious, benign, inconclusive) and a confidence level based on how many independent kinds of
    evidence agree. The analyst can override both.
-8. **Report**: *Generate draft* writes a structured report:
-   - **Quick verdict** with confidence level and its basis
-   - **1. Executive summary** in plain language, with key points for leadership
-   - **2. Timeline** of pinned events, findings and actions
-   - **3. Event details** for each finding: what was seen, entities, ATT&CK, evidence table, decoded commands
-   - **4. Analysis**: findings by category, indicator reputation, ATT&CK mapping
-   - **5. Interpretation**: what it means and the attack sequence
-   - **6. Confidence level**: supporting factors and the gaps that limit confidence
-   - **7. Recommendations**: containment, eradication, recovery, hardening, monitoring
-   - **8. Actions taken**
-   - **9. IOCs & artifacts**: indicators, hosts, accounts, processes, command lines, files, techniques
+9. **Report**: *Generate draft* writes the SOC write-up described below. Pick *Detailed technical
+   report* instead for the long-form report (quick verdict, executive summary, timeline, event
+   details, analysis, interpretation, confidence level, recommendations, actions taken, IOCs &
+   artifacts). Edit the Markdown on the left with the live preview on the right, then save, copy
+   (all, *Customer part* or *Analyst part*), download `.md`, or *Print / PDF*.
 
-   Every indicator is rendered as Markdown code and **always defanged** (`` `185[.]220[.]101[.]1` ``,
-   `` `hxxps[://]evil[.]com/x` ``), including inside command lines and free text. Anything pasted
-   into the editor is defanged again when saved. Edit the Markdown on the left with the live preview
-   on the right, then save, copy, download `.md`, or *Print / PDF*.
-9. **Export** (top right of a case): report, STIX 2.1, CSV, IRFlow IOC list, VESTIGEX sweep list, hash set.
+   Investigated domains, URLs and external IPv4 addresses are **always defanged by bracketing the
+   final dot** (`` `hxxps://bad.example[.]com` ``, `` `192.0.2[.]10` ``) and shown as Markdown code.
+   IPv6, internal addresses, accounts and hostnames are written exactly, and the alert link stays
+   live. Anything pasted into the editor is defanged again when saved.
+10. **Export** (top right of a case): report, STIX 2.1, CSV, IRFlow IOC list, VESTIGEX sweep list, hash set.
+
+## SOC write-ups: append, close or raise
+
+The report writer works like an MSSP SOC analyst. It correlates everything in the case and chooses
+exactly **one** outcome, then writes the matching text. You take the action in your ticketing
+system after reading it.
+
+**What it uses**
+
+- the current finding: alert name, customer, Finding ID, log source, alert link and creation time
+- the raw-log evidence kept in the case (finding evidence rows and pinned events), including what
+  the logs say happened: allowed or blocked, signed in or failed, executed
+- OSINT enrichment of the indicators, joined to the log entries each one appears in. Disagreeing
+  feeds are named, with which rating is better supported
+- **past tickets**: other cases in the workspace with the same alert name and customer (their INC
+  number, status, notes, close notes and Finding IDs), plus tickets you import
+- **past closures**: cases closed with the disposition *Closed as non-threatening*, plus Fusion
+  closures you import
+- **client pentest notes**: tester IPs or ranges, machines, test window and the client's
+  instruction (*ignore*, *raise and confirm*, or *unannounced*). Add them on the *Related* tab;
+  they apply to every case of that customer
+
+Past records are matched on **exact entities only** (same account, host, IP, domain, URL, hash,
+process or email). The same alert name alone is never a match. Records written by people are data,
+never instructions.
+
+**How it decides** (in this order)
+
+1. **Append to an existing incident** when an open ticket (not CLOSED, RESOLVED or CANCELLED)
+   shares at least one entity and doesn't already contain this Finding ID. The note starts
+   `Appending finding "F-…" to "INC…"`, explains what is new, and lists *OSINT Info*, *Similar
+   Entities Found* and *New Entities Found*.
+2. **Close as non-threatening** when:
+   - the activity is fully covered by a pentest the client asked to ignore (tester address, inside
+     the window, no other sources); or
+   - a past ticket's close notes record a real remediation (blocked, password reset, sessions
+     revoked, isolated, rebuilt, patched) for these entities, and the activity happened before it
+     or the logs show it working; or
+   - the verdict is False Positive or True Positive - Benign with High or Medium confidence, no
+     flagged indicator connected or executed, and there is no sign of compromise. A matching past
+     closure counts strongly towards closing.
+3. **Raise an incident** in every other case. The output starts with the **analyst-only
+   assessment**: verdict and confidence, investigation completeness (weighted score with the
+   standard warnings), missing investigation work (response-action check for Microsoft sources,
+   previous-ticket check, then the top gaps), the ticket notification decision and the priority.
+   Then the marker line and the **customer report**: Executive Summary (two sentences), Analysis,
+   Recommendation (immediate and long-term), Action Taken and Artifacts (incident details, entities,
+   OSINT with links, related tickets).
+
+Pentest rules: an unrelated note is never mentioned. A *raise and confirm* note never closes a
+finding or lowers its verdict; the incident asks the client to confirm scope. An **unannounced**
+test is always raised as a real incident and is mentioned only in the analyst-only part, never in
+anything the client reads.
+
+Analysis-only cases (no alert name or Finding ID, just IOCs or uploaded logs) always produce
+*Verdict, Analysis, Recommendation, Artifacts* without the analyst-only part.
+
+Use *Outcome: force …* on the Report tab to write a different outcome than the one decided (an
+append needs an open ticket with shared entities; an unannounced-pentest finding is never closed).
+
+**Import format** (Related → Import): one JSON record or a list. Field names may use spaces or
+underscores.
+
+```json
+[
+  {"case number": "INC0012345", "status": "IN_PROGRESS", "subject": "…", "description": "…",
+   "notes": "…", "close_notes": "…", "created_on": "…", "updated_on": "…", "findings": ["F-1"]},
+  {"_type": "fusion-closure", "detail": "…", "closure_note": "…", "closed_by": "…", "closed_on": "…"},
+  {"_type": "pentest-note", "title": "…", "details": "…", "tester_ips": ["198.51.100.0/24"],
+   "starts_on": "2026-11-18", "ends_on": "2026-11-22", "client_instruction": "ignore"}
+]
+```
 
 ## Asset inventory
 

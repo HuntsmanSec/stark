@@ -6,6 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
+### Added
+- **Automatic MITRE ATT&CK mapping.** Techniques are mapped from the case evidence without manual
+  steps: security findings, the logs arranged in the Log Arranger (behaviour patterns with a clear
+  meaning, tagged with the log sources), threat intelligence on the case indicators (C2, phishing,
+  brute force, scanning, Tor, miners, ransomware, stealers; look-alike domains), pinned events,
+  recorded processes / command lines / files and the alert name. Each technique lists its basis.
+  Context-only patterns (an ordinary successful logon, RDP port use) need a finding behind them.
+  Analysts can remove a technique (it stays removed) and restore it later.
+- **SOC write-up engine** (`stark.soc`) for MSSP triage. It correlates the raw-log evidence, OSINT
+  enrichment, past tickets, past Non-Threatening closures and client pentest notes, reaches a
+  verdict (True Positive - Malicious / Benign, False Positive, Inconclusive, with confidence) and
+  writes exactly one outcome:
+  - **Append** to an open ticket that shares exact entities (OSINT Info, Similar Entities Found,
+    New Entities Found).
+  - **Close as non-threatening**: pentest the client asked to ignore, already remediated (strong
+    close notes, timing / blocked activity checked against the logs), or benign / misfire.
+  - **Raise an incident**: analyst-only assessment (verdict, weighted investigation completeness,
+    missing investigation work, ticket notification decision, priority) followed by the customer
+    report (Executive Summary, Analysis, Recommendation, Action Taken, Artifacts).
+  - Pentest handling for *ignore*, *raise and confirm* and *unannounced* tests; unrelated notes are
+    never mentioned and unannounced tests never reach the customer report.
+- Case **alert & ticket fields**: alert name, customer, Finding ID, log source / SIEM, alert link,
+  alert creation time, incident / threat ID, ticket (INC) number, disposition, Finding IDs in the
+  ticket and close notes. Closing a case as non-threatening makes it a past closure for later cases.
+- **Related** tab: past tickets, closures and pentest notes with the entities they share, the
+  decision preview, and JSON import of records from your ticketing system.
+- Workspace **pentest notes** per customer (tester IPs / CIDR ranges, machines, test window, client
+  instruction).
+- Case statuses *On hold*, *Resolved* and *Cancelled*.
+- Report tab: choose the SOC write-up or the detailed technical report, force an outcome, and copy
+  the customer part or the analyst part separately.
+
+### Changed
+- Reports defang investigated domains, URLs and external IPv4 addresses by bracketing the **final
+  dot only** (`hxxps://bad.example[.]com`, `192.0.2[.]10`). IPv6, internal addresses, accounts
+  and hostnames are written exactly, and the alert link stays live.
+- Finding evidence now keeps the log's action (allowed / blocked / failed) so the report can say
+  whether activity actually succeeded.
+
+### Fixed
+- `Net.WebClient`-style .NET type names in command lines are no longer treated as domains.
+
 ## [0.3.1] - 2026-11-20
 
 ### Fixed
@@ -109,7 +153,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Per-source rate limiting, a SQLite result cache, proxy support, `--fail-on` exit codes.
 - CI on Windows, macOS and Linux, and standalone release binaries.
 
-[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/HuntsmanSec/stark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/HuntsmanSec/stark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/HuntsmanSec/stark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/HuntsmanSec/stark/compare/v0.1.0...v0.2.0

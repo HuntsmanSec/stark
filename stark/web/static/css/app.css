@@ -115,7 +115,14 @@ textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height:
 .pill.sev-low { background: var(--accent-soft); color: var(--low); }
 .pill.st-open { background: var(--accent-soft); color: var(--accent); } .pill.st-in_progress { background: var(--sus-soft); color: var(--sus); }
 .pill.st-contained { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
-.pill.st-closed { background: var(--unk-soft); color: var(--unk); }
+.pill.st-closed, .pill.st-cancelled { background: var(--unk-soft); color: var(--unk); }
+.pill.st-on_hold { background: var(--sus-soft); color: var(--sus); }
+.pill.st-resolved { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
+.decision { border-left: 4px solid var(--accent); }
+.decision.o1 { border-left-color: var(--sus); } .decision.o2 { border-left-color: var(--ok); } .decision.o3 { border-left-color: var(--mal); }
+.rel-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--border); }
+.rel-row:first-child { border-top: 0; }
+.match-chip { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .tag { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 5px; background: var(--bg-sunk); color: var(--text-2); border: 1px solid var(--border); }
 
 /* layout: app shell ---------------------------------------------------- */
