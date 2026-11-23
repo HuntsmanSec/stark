@@ -58,6 +58,8 @@ class Provider:
     #: informational sources (no verdict) are only queried with --all or -p
     informational: ClassVar[bool] = False
     description: ClassVar[str] = ""
+    #: extra settings stored next to the key (e.g. a server address), name -> label
+    extra_keys: ClassVar[Dict[str, str]] = {}
 
     def __init__(
         self,
@@ -66,12 +68,14 @@ class Provider:
         timeout: float = 20,
         options: Optional[Dict[str, Any]] = None,
         settings: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Optional[str]]] = None,
     ):
         self.api_key = api_key
         self.session = session or make_session()
         self.timeout = timeout
         self.options = options or {}
         self.settings = settings or {}
+        self.extra = {k: v for k, v in (extra or {}).items() if v}
         self.limiter = RateLimiter(self.options.get("rate_limit", self.rate_limit))
 
     @classmethod
@@ -83,6 +87,8 @@ class Provider:
 
     @property
     def available(self) -> bool:
+        if any(k not in self.extra for k in self.extra_keys):
+            return False
         return bool(self.api_key) or not self.requires_key
 
     # ------------------------------------------------------------------ api

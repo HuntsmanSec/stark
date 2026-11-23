@@ -133,6 +133,8 @@ async function exportMenu(anchor) {
   popMenu(anchor, [
     { icon: "file", label: "Report (Markdown)", onclick: () => dl("report") },
     { icon: "layers", label: "STIX 2.1 bundle", onclick: () => dl("stix") },
+    { icon: "layers", label: "MISP event (JSON)", onclick: () => dl("misp") },
+    { icon: "upload", label: "Send to MISP", onclick: () => sendToMisp() },
     { icon: "grid", label: "Indicators (CSV)", onclick: () => dl("csv") },
     { icon: "target", label: "IRFlow Timeline IOC list", onclick: () => dl("irflow") },
     { icon: "hash", label: "VESTIGEX IOC sweep list", onclick: () => dl("vestigex") },
@@ -143,6 +145,15 @@ async function exportMenu(anchor) {
       try { await api("DELETE", `/cases/${ctx.id}`); toast("Case deleted"); ctx = null; go("/cases"); } catch (e) { fail(e); }
     } },
   ]);
+}
+
+async function sendToMisp() {
+  if (!await confirmDialog(`Send ${ctx.data.ref} to MISP?`, "Malicious, suspicious and unrated indicators are added to an unpublished MISP event shared with your organisation only, tagged with the case TLP and ATT&CK techniques. Sending again updates the same event.", { danger: false, ok: "Send to MISP" })) return;
+  try {
+    const r = await api("POST", `/cases/${ctx.id}/misp`);
+    toast(`${r.created ? "Created" : "Updated"} MISP event ${r.id} with ${r.attributes} indicator(s)`, "ok", 5000);
+    window.open(r.url, "_blank", "noopener");
+  } catch (e) { fail(e); }
 }
 
 function stepper(c) {

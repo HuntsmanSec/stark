@@ -4,7 +4,12 @@ COPY pyproject.toml README.md LICENSE ./
 COPY stark ./stark
 RUN pip install --no-cache-dir . && useradd -m stark && mkdir -p /data && chown stark /data
 USER stark
-ENV STARK_DATA_DIR=/data
+# Everything you create (accounts, API keys, cases, settings, CLI config) lives in /data.
+# Keep it on a named volume so it survives image updates: docker run -v stark-data:/data ...
+ENV STARK_DATA_DIR=/data \
+    STARK_CONFIG=/data/config.toml \
+    STARK_CACHE_DIR=/data/cache \
+    STARK_IN_DOCKER=1
 VOLUME ["/data"]
 EXPOSE 8765
 ENTRYPOINT ["stark"]

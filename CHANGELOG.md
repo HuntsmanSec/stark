@@ -6,6 +6,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-23
+
+### Added
+- **MISP integration.** MISP is now a reputation source: indicators are looked up in your own MISP
+  server (attributes marked for IDS in High/Medium events are malicious, Low/Undefined suspicious,
+  warninglist hits and `false-positive` tags harmless, context-only attributes unknown), with
+  events, galaxies (malware families, threat actors) and a link to the event. Set the server
+  address and automation key in *Settings → API keys* or with `stark config set misp_url` /
+  `stark config set misp`. Self-signed servers: `STARK_MISP_VERIFY_TLS=0`.
+- **Send a case to MISP** (case *Export → Send to MISP*): creates an unpublished event shared with
+  your organisation only, with the case TLP, ATT&CK techniques as galaxy tags, and the case's
+  malicious/suspicious indicators marked for IDS. Sending again updates the same event.
+- MISP event JSON export: case *Export → MISP event (JSON)* and `stark query -F misp`.
+- New logo (`docs/assets/`), used for the favicon and the workspace sidebar.
+- **Safe updates.** The workspace database records its schema and app version. When a different
+  S.T.A.R.K version opens it, a copy is saved to `<data folder>/backups` before anything is
+  upgraded (the last 10 are kept). Accounts, API keys, cases and settings carry over to new
+  versions; a v0.3.1 database is covered by the test suite.
+- `stark update`: checks the latest GitHub release and updates the installation. Binaries are
+  downloaded, verified against `SHA256SUMS.txt` and swapped in; pip and pipx installs are upgraded
+  in place; git checkouts and Docker get the exact steps. `--check` only reports.
+- `stark backup` (database plus CLI config in one zip, `--list` for automatic backups) and
+  `stark restore` (validates the file and saves the current data first).
+- `stark paths`: where accounts, keys, cases, backups, config and cache are stored.
+- Workspace update notice in the sidebar and a *Settings → Updates & your data* card with the
+  update steps for this install, the database location and the last upgrade backup. The check only
+  calls the public GitHub releases API and can be turned off with `STARK_NO_UPDATE_CHECK=1`.
+
+### Changed
+- The Docker image keeps the CLI config and cache in the `/data` volume too, so CLI API keys also
+  survive image updates.
+
 ## [0.4.0] - 2026-11-23
 
 ### Added
@@ -153,7 +185,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Per-source rate limiting, a SQLite result cache, proxy support, `--fail-on` exit codes.
 - CI on Windows, macOS and Linux, and standalone release binaries.
 
-[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/HuntsmanSec/stark/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/HuntsmanSec/stark/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/HuntsmanSec/stark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/HuntsmanSec/stark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/HuntsmanSec/stark/compare/v0.2.0...v0.3.0

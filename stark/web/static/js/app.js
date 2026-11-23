@@ -76,7 +76,7 @@ function renderAuth(mode = "login") {
   const canSignup = state.meta && state.meta.allow_signup;
   const feats = [
     ["layers", "Log Arranger", "Drop in messy exports from Sentinel, Defender, Splunk, QRadar, CrowdStrike, firewalls & WAFs and get one clean timeline."],
-    ["zap", "19 reputation sources", "VirusTotal, AbuseIPDB, urlscan, ANY.RUN, OTX, abuse.ch, Shodan and more, checked in one click."],
+    ["zap", "20 reputation sources", "VirusTotal, AbuseIPDB, urlscan, ANY.RUN, OTX, abuse.ch, Shodan, your own MISP and more, checked in one click."],
     ["grid", "MITRE ATT&CK mapping", "Suggested techniques straight from the evidence."],
     ["file", "Incident report writer", "An executive summary, technical analysis and recommendations, drafted for you."],
     ["lock", "Client data stays private", "Raw logs are processed in memory and never saved."],
@@ -84,7 +84,7 @@ function renderAuth(mode = "login") {
   mount(app, h("div", { class: "auth" },
     h("div", { class: "auth-hero" },
       h("div", null,
-        h("div", { class: "brand", style: { padding: 0 } }, h("div", { class: "brand-mark" }, icon("shield")),
+        h("div", { class: "brand", style: { padding: 0 } }, h("div", { class: "brand-mark" }, icon("stark")),
           h("div", null, h("div", { class: "brand-name" }, "S.T.A.R.K"), h("div", { class: "brand-sub" }, "Security Threat Assessment & Reputation Kit"))),
         h("h1", null, "From messy logs to a clear incident report."),
         h("p", { class: "lead" }, "A case workspace for analysts and the people they report to. Triage evidence, check every indicator and share the story with your team."),
@@ -105,12 +105,36 @@ const NAV = [
 ];
 const NAV2 = [["/team", "users", "Team & workspace"], ["/settings", "key", "API keys & settings"], ["/setup", "sparkle", "Setup guide"]];
 
+// ---------------------------------------------------------------- updates
+let updateInfo = null; let updateAsked = false;
+function updateNotice() {
+  const box = h("div", { class: "update-slot" });
+  const draw = () => {
+    if (!updateInfo || !updateInfo.newer) return;
+    mount(box, h("button", { class: "update-note", onclick: () => updateDialog() }, icon("download"),
+      h("div", null, h("b", null, `Version ${updateInfo.latest} is available`), h("span", null, "Your data is kept. See how to update"))));
+  };
+  if (updateInfo) draw();
+  else if (!updateAsked) { updateAsked = true; api("GET", "/update").then((d) => { updateInfo = d; draw(); }).catch(() => {}); }
+  return box;
+}
+function updateDialog() {
+  const u = updateInfo;
+  const m = modal({ title: u.newer ? `Update to S.T.A.R.K ${u.latest}` : "S.T.A.R.K is up to date", subtitle: `You have version ${u.current}.`,
+    body: h("div", { class: "col gap-12" },
+      h("div", { class: "notice info" }, icon("lock"), h("div", { class: "small" }, h("b", null, "Your accounts, API keys and cases are kept. "),
+        "They are stored outside the program, and the workspace database is backed up automatically before a new version upgrades it.")),
+      h("ol", { class: "small", style: { paddingLeft: "18px", margin: 0 } }, u.steps.map((s) => h("li", { style: { marginBottom: "6px" } }, s.replace(/`/g, "")))),
+      h("a", { href: u.url, target: "_blank", rel: "noopener noreferrer", class: "small" }, "Release notes and downloads ↗")),
+    foot: [h("span", { class: "spacer" }), h("button", { class: "btn primary", onclick: () => m.close() }, "Close")] });
+}
+
 export function shell(title, crumbs, content, { actions } = {}) {
   const u = state.user; const ws = state.ws;
   const path = location.pathname;
   const navLink = ([href, ic, label]) => link(href, { class: (href === "/" ? path === "/" : path.startsWith(href)) ? "active" : "" }, icon(ic), label);
   const sidebar = h("aside", { class: "sidebar" },
-    h("div", { class: "brand" }, h("div", { class: "brand-mark" }, icon("shield")),
+    h("div", { class: "brand" }, h("div", { class: "brand-mark" }, icon("stark")),
       h("div", null, h("div", { class: "brand-name" }, "S.T.A.R.K"), h("div", { class: "brand-sub" }, "Threat Assessment Kit"))),
     h("button", { class: "ws-switch", onclick: (e) => wsMenu(e.currentTarget) },
       h("div", { class: "ws-avatar", style: { background: colorFor(ws.name) } }, initials(ws.name)),
@@ -118,6 +142,7 @@ export function shell(title, crumbs, content, { actions } = {}) {
       icon("chevdown")),
     h("div", { class: "nav-label" }, "Investigate"), h("nav", { class: "nav" }, NAV.map(navLink)),
     h("div", { class: "nav-label" }, "Workspace"), h("nav", { class: "nav" }, NAV2.map(navLink)),
+    updateNotice(),
     h("div", { class: "side-foot" }, avatar(u.name), h("div", { class: "who" }, h("b", { class: "ellipsis" }, u.name), h("span", { class: "ellipsis" }, u.email)),
       h("button", { class: "btn ghost icon sm", title: "Account", onclick: (e) => userMenu(e.currentTarget) }, icon("settings"))));
   const search = h("input", { class: "input", placeholder: "Paste an IOC or search hosts, IPs, cases…", title: "Fanged or defanged IOCs get a quick reputation summary",
@@ -392,7 +417,24 @@ async function renderSettings() {
           h("div", { class: "full row" }, h("span", { class: "spacer" }), h("button", { class: "btn", onclick: async () => {
             try { const r = await api("PATCH", "/me", { name: nameIn.value, ...(pwNew.value ? { current_password: pwCur.value, new_password: pwNew.value } : {}) }); setUser(r.user); toast("Account updated"); renderSettings(); } catch (e) { fail(e); }
           } }, "Update account")))));
+    const about = h("div", { class: "card mt-16", id: "updates" }, h("div", { class: "card-head" }, icon("download"), h("h3", null, "Updates & your data")),
+      h("div", { class: "card-body col gap-12" }, h("div", { class: "muted small" }, "Checking…")));
+    content.appendChild(about);
+    api("GET", "/update").then((u) => {
+      updateInfo = u;
+      mount(about.querySelector(".card-body"),
+        h("div", { class: "row wrap gap-12" }, h("div", { class: "grow" }, h("b", null, `Version ${u.current}`),
+          h("div", { class: "small muted" }, !u.enabled ? "Update checks are turned off (STARK_NO_UPDATE_CHECK)." : u.latest ? (u.newer ? `Version ${u.latest} is available.` : u.latest === u.current ? "This is the latest release." : `Newer than the latest published release (${u.latest}).`) : "Couldn't reach GitHub to check for updates.")),
+          h("button", { class: `btn ${u.newer ? "primary" : ""}`, onclick: () => updateDialog() }, icon("download"), u.newer ? "How to update" : "Update instructions")),
+        h("div", { class: "notice info" }, icon("lock"), h("div", { class: "small" }, h("b", null, "Updates never remove your data. "),
+          "Accounts, API keys, cases, pentest notes and settings are stored in this database, outside the program. Before a new version changes it, a copy is saved in the backups folder.")),
+        h("div", { class: "small" }, h("div", null, h("span", { class: "muted" }, "Database: "), h("span", { class: "mono" }, u.data.database)),
+          h("div", null, h("span", { class: "muted" }, "Automatic backups: "), h("span", { class: "mono" }, u.data.backups)),
+          u.data.last_backup ? h("div", null, h("span", { class: "muted" }, "Last upgrade backup: "), h("span", { class: "mono" }, u.data.last_backup)) : null),
+        h("div", { class: "hint" }, "Make a full backup any time with “stark backup” (and restore it with “stark restore FILE”)."));
+    }).catch(() => mount(about.querySelector(".card-body"), h("div", { class: "muted small" }, "Update information is not available.")));
     if (location.hash === "#account") document.getElementById("account").scrollIntoView();
+    if (location.hash === "#updates") about.scrollIntoView();
   } catch (e) { fail(e); }
 }
 

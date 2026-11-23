@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from .. import __version__
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -143,6 +145,10 @@ MIGRATIONS = [
 ]
 
 
+# Bumped automatically with every migration; stored in meta so upgrades can be detected.
+SCHEMA_VERSION = 1 + len(MIGRATIONS)
+
+
 def data_dir() -> Path:
     if os.environ.get("STARK_DATA_DIR"):
         return Path(os.environ["STARK_DATA_DIR"]).expanduser()
@@ -158,6 +164,7 @@ class DB:
         self.path = Path(path) if path else data_dir() / "workspace.sqlite"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self.backup_path = self._backup_before_upgrade()
         with self.connect() as con:
             con.executescript(SCHEMA)
             for sql in MIGRATIONS:  # idempotent upgrades of databases created by older versions
@@ -165,11 +172,46 @@ class DB:
                     con.execute(sql)
                 except sqlite3.OperationalError:
                     pass
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('app_version', ?)", (__version__,))
         if os.name != "nt":
             try:
                 os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
             except OSError:
                 pass
+
+    def _backup_before_upgrade(self) -> Optional[Path]:
+        """Copy an existing database to ``backups/`` before a newer (or older) S.T.A.R.K
+        version changes it. Accounts, API keys and cases are never at risk from an update."""
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return None
+        try:
+            con = sqlite3.connect(str(self.path))
+            try:
+                rows = dict(con.execute("SELECT key, value FROM meta WHERE key IN ('schema_version','app_version')"))
+            except sqlite3.OperationalError:
+                rows = {}
+            has_data = con.execute("SELECT name FROM sqlite_master WHERE name='users'").fetchone() is not None
+            con.close()
+        except sqlite3.DatabaseError:
+            return None
+        if not has_data:
+            return None
+        stored_schema = int(rows.get("schema_version") or 0)
+        stored_app = rows.get("app_version") or ""
+        if stored_schema == SCHEMA_VERSION and stored_app == __version__:
+            return None
+        from ..maintenance import auto_backup
+        reason = f"v{stored_app}-to-v{__version__}" if stored_app else f"before-v{__version__}"
+        try:
+            dest = auto_backup(self.path, reason)
+        except (OSError, sqlite3.Error) as exc:
+            print(f"  ! could not back up the workspace database before upgrading: {exc}", file=sys.stderr)
+            return None
+        if dest:
+            print(f"  Saved a copy of your workspace{f' (v{stored_app})' if stored_app else ''} before upgrading it: {dest}",
+                  flush=True)
+        return dest
 
     def connect(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)
@@ -179,6 +221,13 @@ class DB:
             con.execute("PRAGMA foreign_keys=ON")
             self._local.con = con
         return con
+
+    def close(self) -> None:
+        """Close this thread's connection (Windows can't replace or delete an open database file)."""
+        con = getattr(self._local, "con", None)
+        if con is not None:
+            con.close()
+            self._local.con = None
 
     # small helpers --------------------------------------------------------
     def q(self, sql: str, args: Iterable[Any] = ()) -> List[Dict[str, Any]]:

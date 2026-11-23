@@ -1,11 +1,12 @@
 <div align="center">
 
-# S.T.A.R.K
-
-**Security Threat Assessment and Reputation Kit**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <img src="docs/assets/logo.svg" alt="S.T.A.R.K: Security Threat Assessment and Reputation Kit" width="440">
+</picture>
 
 A case workspace and command-line toolkit for OSINT / threat-intelligence reputation lookups.
-Arrange messy SIEM, EDR, firewall and WAF logs, check indicators against 19 reputation sources,
+Arrange messy SIEM, EDR, firewall and WAF logs, check indicators against 20 reputation sources (including your own MISP),
 map MITRE ATT&CK and generate the incident report. Includes STIX 2.1 and DFIR integrations.
 
 [![CI](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml/badge.svg)](https://github.com/HuntsmanSec/stark/actions/workflows/ci.yml)
@@ -56,16 +57,20 @@ and double-click it (or run `stark` after installing with pip). Your browser ope
   (`hxxps://bad.example[.]com`, `185.220.101[.]1`), while the alert link stays live.
 - **Guided setup**: right after sign-up, connect your API keys (with a one-click key test) before
   opening the first case.
-- **Exports**: report, STIX 2.1, CSV, IRFlow Timeline IOC list, VESTIGEX sweep list, hash set.
+- **Exports**: report, STIX 2.1, MISP event (or send straight to MISP), CSV, IRFlow Timeline IOC list, VESTIGEX sweep list, hash set.
 
 See [docs/workspace.md](docs/workspace.md) for team hosting, privacy details and the full list
 of supported log formats.
 
 ## Features
 
-- **19 reputation sources** in one query: VirusTotal, AbuseIPDB, urlscan.io, ANY.RUN, Joe Sandbox,
+<p align="center"><img src="docs/assets/stark-infographic.svg" alt="S.T.A.R.K features and limitations" width="820"></p>
+
+- **20 reputation sources** in one query: VirusTotal, AbuseIPDB, urlscan.io, ANY.RUN, Joe Sandbox,
   Hybrid Analysis, Recorded Future, Cisco Talos, AlienVault OTX, MalwareBazaar, ThreatFox, URLhaus,
-  Have I Been Pwned, MXToolbox, Shodan, GreyNoise, Pulsedive, IPinfo and crt.sh
+  Have I Been Pwned, MXToolbox, Shodan, GreyNoise, Pulsedive, IPinfo, crt.sh and your own **MISP**
+- **MISP in both directions**: look indicators up in your MISP server, and send a finished case
+  back as an event (TLP, ATT&CK techniques and IDS flags included)
 - **Single or bulk lookups**: arguments, files, stdin pipes or STIX bundles. Defanged input
   (`hxxps://evil[.]com`) is refanged automatically
 - **One consolidated verdict** per observable (`malicious`, `suspicious`, `harmless`, `unknown`)
@@ -106,8 +111,39 @@ python -m pip install .
 
 ```bash
 docker build -t stark .
-docker run --rm -e STARK_VIRUSTOTAL_API_KEY stark query 8.8.8.8
+docker run -d -p 8765:8765 -v stark-data:/data stark          # workspace; data kept in the stark-data volume
+docker run --rm -v stark-data:/data stark query 8.8.8.8        # CLI using the same keys
 ```
+
+## Updating (your data is kept)
+
+Updating replaces the program only. Your accounts, workspaces, **API keys**, **cases**, pentest
+notes, assets and settings are stored outside it, in your user data and config folders (run
+`stark paths` to see them), so they carry over to every new version. Before a new version changes
+the workspace database, a copy is saved to `<data folder>/backups` automatically (the last 10 are
+kept), so you can always go back.
+
+| Installed with | Update |
+|---|---|
+| Standalone binary | `stark update` downloads the new binary, verifies its SHA-256 checksum and replaces the old one. Or download the new file from the [releases page](https://github.com/HuntsmanSec/stark/releases/latest) and replace the old file |
+| pip | `stark update`, or `python -m pip install --upgrade git+https://github.com/HuntsmanSec/stark.git@vX.Y.Z` |
+| pipx | `stark update`, or `pipx install --force git+https://github.com/HuntsmanSec/stark.git@vX.Y.Z` |
+| Git checkout | `git pull` then `python -m pip install -e .` |
+| Docker | rebuild or pull the image and recreate the container with the **same** volume (`-v stark-data:/data`) |
+
+Then restart the workspace. `stark update --check` only reports whether a new release exists. The
+workspace also shows a notice in the sidebar when one is available (it asks the public GitHub
+releases API and sends no data; turn this off with `STARK_NO_UPDATE_CHECK=1`).
+
+**Backups and moving to another computer**
+
+```bash
+stark backup -o stark-backup.zip     # workspace database (accounts, API keys, cases) + CLI config
+stark backup --list                  # automatic backups made before upgrades
+stark restore stark-backup.zip       # stop the workspace first; current data is saved before restoring
+```
+
+The backup holds your API keys and case data, so keep it private.
 
 ## Configure API keys
 
@@ -150,6 +186,7 @@ $env:STARK_VIRUSTOTAL_API_KEY = "..."
 | `greynoise` | GreyNoise (optional) | https://viz.greynoise.io/account/api-key |
 | `pulsedive` | Pulsedive (optional) | https://pulsedive.com/account |
 | `ipinfo` | IPinfo (optional) | https://ipinfo.io/account/token |
+| `misp` + `misp_url` | MISP (your server) | MISP: *My profile → Auth keys*; `misp_url` is the server address |
 | - | Cisco Talos, crt.sh | No key needed |
 
 The config file is `%APPDATA%\stark\config.toml` on Windows and `~/.config/stark/config.toml`
@@ -188,7 +225,7 @@ stark query example.com --all                 # include informational sources (I
 
 ### Output formats
 
-`-F/--format`: `table` (default), `json`, `jsonl`, `csv`, `md`, `stix`, `irflow`, `vestigex`, `hashset`.
+`-F/--format`: `table` (default), `json`, `jsonl`, `csv`, `md`, `stix`, `misp`, `irflow`, `vestigex`, `hashset`.
 
 ```bash
 stark query -f iocs.txt -F json --raw -o results.json   # include raw source details
@@ -223,6 +260,7 @@ Private/reserved IPs, well-known Microsoft/CDN noise domains and file names that
 |---|---|
 | [Hayabusa](https://github.com/Yamato-Security/hayabusa) | `stark enrich timeline.csv --preset hayabusa` mines `Details`/`ExtraFieldInfo` (CSV or JSON/JSONL), skips `IMPHASH`, and writes the timeline back with `STARK_Verdict`, `STARK_Score`, `STARK_FlaggedBy`, `STARK_Families` and `STARK_IOCs` columns |
 | [IRFlow Timeline](https://github.com/r3nzsec/irflow-timeline) | `-F irflow` writes an IOC list with the `ioc_value` header that IRFlow's *IOC Matching* loader reads, plus verdict columns. `stark enrich export.csv --preset irflow` enriches IRFlow CSV/TSV exports |
+| [MISP](https://www.misp-project.org) | Lookup source (`misp` + `misp_url`), `-F misp` event JSON, and *Send to MISP* from a workspace case |
 | [VESTIGEX](https://vestigex.app) | `-F vestigex` writes an IOC sweep list, `-F hashset` a known-bad hash set, `-F stix` a STIX bundle. `--preset vestigex` enriches VESTIGEX CSV exports |
 
 ```bash
