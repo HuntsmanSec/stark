@@ -53,7 +53,7 @@ def test_v031_database_upgrades_without_losing_data(old_db, capsys):
 
 def test_backup_and_restore_roundtrip(old_db, tmp_path):
     from stark.web.app import create_app
-    create_app(db_path=str(old_db))
+    create_app(db_path=str(old_db)).config["DB"].close()
     cfg = tmp_path / "config.toml"
     cfg.write_text('[keys]\nvirustotal = "cli-key"\n')
     out = m.create_backup(tmp_path / "b.zip", db_file=old_db, config_file=cfg)

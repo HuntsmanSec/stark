@@ -222,6 +222,13 @@ class DB:
             self._local.con = con
         return con
 
+    def close(self) -> None:
+        """Close this thread's connection (Windows can't replace or delete an open database file)."""
+        con = getattr(self._local, "con", None)
+        if con is not None:
+            con.close()
+            self._local.con = None
+
     # small helpers --------------------------------------------------------
     def q(self, sql: str, args: Iterable[Any] = ()) -> List[Dict[str, Any]]:
         return [dict(r) for r in self.connect().execute(sql, tuple(args)).fetchall()]
