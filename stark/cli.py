@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -268,6 +269,9 @@ def cmd_providers(args) -> int:
     for p in PROVIDERS:
         src = cfg.key_source(p.config_key())
         status = "ready" if src else ("ready (no key)" if not p.requires_key else "needs key")
+        missing = [k for k in p.extra_keys if not cfg.get_key(k)]
+        if missing:
+            status = "needs " + " + ".join(([] if src else ["key"]) + missing)
         if p.name in cfg.disabled:
             status = "disabled"
         rows.append({
@@ -406,6 +410,83 @@ def cmd_serve(args) -> int:
     return EXIT_OK
 
 
+def cmd_paths(args) -> int:
+    from .maintenance import paths
+    for k, v in paths().items():
+        print(f"{k:<9} {v}")
+    print("\nYour accounts, API keys, cases and settings live in the data and config folders above, outside the\n"
+          "program, so updating S.T.A.R.K never removes them.")
+    return EXIT_OK
+
+
+def cmd_backup(args) -> int:
+    from .maintenance import create_backup, list_backups
+    if args.list:
+        items = list_backups()
+        if not items:
+            print("no automatic backups yet")
+        for b in items:
+            print(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(b['created']))}  {b['size'] // 1024:>7} KB  {b['file']}")
+        return EXIT_OK
+    out = Path(args.output or f"stark-backup-{time.strftime('%Y%m%d-%H%M%S')}.zip")
+    create_backup(out, db_file=Path(args.db) if args.db else None)
+    print(f"[+] backup written to {out.resolve()}")
+    print("    It contains your workspace database (accounts, API keys, cases) and CLI config. Keep it private.")
+    return EXIT_OK
+
+
+def cmd_restore(args) -> int:
+    from .maintenance import restore_backup
+    if not args.yes:
+        ans = input("Restore replaces the current workspace data (a copy of it is saved first). "
+                    "Stop the workspace before restoring. Continue? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("cancelled")
+            return EXIT_OK
+    res = restore_backup(Path(args.file), db_file=Path(args.db) if args.db else None)
+    print(f"[+] restored {', '.join(res['restored'])}")
+    if res.get("previous"):
+        print(f"    the previous data was saved to {res['previous']}")
+    return EXIT_OK
+
+
+def cmd_update(args) -> int:
+    from . import maintenance as m
+    rel = m.latest_release(use_cache=False)
+    kind = m.install_kind()
+    if not rel or not rel.get("version"):
+        _err(f"could not reach GitHub to check for updates. See {m.RELEASES_PAGE}")
+        return EXIT_ERROR
+    current, latest = __version__, rel["version"]
+    if m.parse_version(latest) <= m.parse_version(current):
+        print(f"[+] S.T.A.R.K {current} is up to date (latest release: {latest})")
+        return EXIT_OK
+    print(f"[*] S.T.A.R.K {latest} is available (you have {current}). Installed as: {kind}")
+    print(f"    Release notes: {rel['url']}")
+    print("    Your accounts, API keys and cases are kept: they are stored outside the program, and the workspace\n"
+          "    database is backed up automatically before the new version upgrades it.")
+    if args.check or kind not in ("binary", "pip", "pipx"):
+        for step in m.instructions(kind, latest):
+            print(f"    - {step.replace('`', '')}")
+        return EXIT_OK
+    if not args.yes and input(f"Update to {latest} now? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("cancelled")
+        return EXIT_OK
+    try:
+        from .maintenance import auto_backup, db_path
+        auto_backup(db_path(), f"before-update-to-v{latest}")
+    except Exception:  # noqa: BLE001 - backup is best effort here; the database also backs itself up on upgrade
+        pass
+    if kind == "binary":
+        exe = m.update_binary(rel)
+        print(f"[+] updated {exe} to {latest}. Start it again to use the new version.")
+        return EXIT_OK
+    code = m.update_pip(latest, pipx=kind == "pipx")
+    if code == 0:
+        print(f"[+] updated to {latest}. Restart the workspace to use the new version.")
+    return EXIT_OK if code == 0 else EXIT_ERROR
+
+
 # ------------------------------------------------------------------------ parser
 
 
@@ -487,6 +568,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--secure-cookies", action="store_true", help="mark cookies Secure (when served over HTTPS)")
     s.add_argument("--db", metavar="FILE", help="workspace database path (default: per-user data folder)")
     s.set_defaults(func=cmd_serve)
+
+    pa = sub.add_parser("paths", help="show where accounts, API keys, cases and backups are stored")
+    pa.set_defaults(func=cmd_paths)
+    b = sub.add_parser("backup", help="back up the workspace database and CLI config to a zip file")
+    b.add_argument("-o", "--output", metavar="FILE", help="zip file to write (default: stark-backup-<date>.zip)")
+    b.add_argument("--db", metavar="FILE", help="workspace database path (default: per-user data folder)")
+    b.add_argument("--list", action="store_true", help="list the automatic backups made before upgrades")
+    b.set_defaults(func=cmd_backup)
+    r = sub.add_parser("restore", help="restore a backup zip (or a .sqlite from the backups folder)")
+    r.add_argument("file")
+    r.add_argument("--db", metavar="FILE", help="workspace database path (default: per-user data folder)")
+    r.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
+    r.set_defaults(func=cmd_restore)
+    u = sub.add_parser("update", help="check for a new release and update this installation (data is kept)")
+    u.add_argument("--check", action="store_true", help="only check and show how to update")
+    u.add_argument("-y", "--yes", action="store_true", help="update without asking")
+    u.set_defaults(func=cmd_update)
 
     v = sub.add_parser("version", help="print version")
     v.set_defaults(func=lambda a: print(BANNER.format(v=__version__)) or EXIT_OK)

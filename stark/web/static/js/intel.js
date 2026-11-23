@@ -9,6 +9,7 @@ const TIERS = [
   ["Recommended free sources", "Free accounts, quick to set up. Start here.", ["virustotal", "abuseipdb", "abusech", "otx", "urlscan", "greynoise", "pulsedive"]],
   ["Sandboxes & enterprise intelligence", "Use these if your organisation has a subscription.", ["recordedfuture", "anyrun", "joesandbox", "hybridanalysis", "shodan"]],
   ["Specialist sources", "Email breach exposure, mail/IP blocklists and IP context.", ["hibp", "mxtoolbox", "ipinfo"]],
+  ["Your threat-sharing platform", "MISP: look indicators up in your own MISP and send cases to it. Needs the server address and an automation key (MISP: My profile → Auth keys).", ["misp_url", "misp"]],
 ];
 
 export const defangText = (v) => String(v).replace(/^http/i, "hxxp").replace("://", "[://]").replace(/@/g, "[@]").replace(/\./g, "[.]");
@@ -20,13 +21,15 @@ export async function keysEditor(wsId, { compact = false, onSaved } = {}) {
   const inputs = {};
   const statusEl = {};
   const row = (key) => {
-    const inp = h("input", { class: "input mono", type: "password", autocomplete: "off", disabled: !k.can_edit,
-      placeholder: key.set ? `Saved (${key.masked})` : key.local_fallback ? "Using the key from this computer's config" : key.required ? "Paste API key" : "Optional: works without a key" });
+    const setting = key.kind === "setting";
+    const inp = h("input", { class: "input mono", type: setting ? "url" : "password", autocomplete: "off", disabled: !k.can_edit,
+      placeholder: setting ? (key.set ? key.masked : key.local_fallback ? "Using the address from this computer's config" : "https://misp.example.org")
+        : key.set ? `Saved (${key.masked})` : key.local_fallback ? "Using the key from this computer's config" : key.required ? "Paste API key" : "Optional: works without a key" });
     inputs[key.name] = inp;
-    const st = h("span", null, key.set || key.local_fallback ? h("span", { class: "pill harmless" }, h("span", { class: "dot" }), "Connected")
+    const st = h("span", null, key.set || key.local_fallback ? h("span", { class: "pill harmless" }, h("span", { class: "dot" }), setting ? "Saved" : "Connected")
       : key.required ? h("span", { class: "pill" }, "Not set") : h("span", { class: "pill pending", title: "Works without a key; a key raises rate limits" }, "Optional"));
     statusEl[key.name] = st;
-    const test = h("button", { class: "btn sm", disabled: !k.can_edit, title: "Run a harmless test lookup with this key" }, "Test");
+    const test = h("button", { class: "btn sm", disabled: !k.can_edit, title: "Run a harmless test lookup with this key", style: setting ? { visibility: "hidden" } : null }, "Test");
     test.onclick = async () => {
       busy(test, true);
       try {
@@ -41,13 +44,14 @@ export async function keysEditor(wsId, { compact = false, onSaved } = {}) {
       h("div", { style: { width: "130px" } }, st),
       h("div", { class: "grow" }, inp),
       test,
-      key.homepage ? h("a", { href: key.homepage, target: "_blank", rel: "noopener noreferrer", class: "btn ghost sm", title: "Get a key" }, icon("external")) : null);
+      key.homepage ? h("a", { style: setting ? { visibility: "hidden" } : null, href: key.homepage, target: "_blank", rel: "noopener noreferrer", class: "btn ghost sm", title: "Get a key" }, icon("external")) : null);
   };
   const groups = TIERS.map(([title, sub, names]) => h("div", { class: "mb-16" }, h("div", { class: "label" }, title), h("div", { class: "hint mb-8" }, sub),
     names.filter((n) => byName[n]).map((n) => row(byName[n]))));
   const save = h("button", { class: "btn primary" }, icon("check"), "Save keys");
   save.onclick = async () => {
     const keys = {}; for (const [n, i] of Object.entries(inputs)) if (i.value.trim()) keys[n] = i.value.trim();
+    // the Test button reads the saved address, so typing a key and an address then pressing Test works after saving
     if (!Object.keys(keys).length) { toast("Paste at least one key first, or skip for now.", "info"); return false; }
     busy(save, true);
     try { await api("PUT", `/workspaces/${wsId}/keys`, { keys }); toast(`Saved ${Object.keys(keys).length} key(s)`); onSaved && onSaved(); }

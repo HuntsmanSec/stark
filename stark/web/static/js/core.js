@@ -66,6 +66,7 @@ const P = {
   moon: '<path d="M21 13A9 9 0 1111 3a7 7 0 0010 10z"/>', chevron: '<path d="M9 6l6 6-6 6"/>', chevdown: '<path d="M6 9l6 6 6-6"/>',
   refresh: '<path d="M20 11a8 8 0 00-14.7-4M4 4v4h4M4 13a8 8 0 0014.7 4M20 20v-4h-4"/>', filter: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>',
   sparkle: '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>', printer: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
+  stark: '<path d="M12 2.6l7.4 2.6v5.8c0 4.6-3 8.3-7.4 10.3-4.4-2-7.4-5.7-7.4-10.3V5.2z"/><path d="M12 7.2l1.1 3.1 3.1 1.1-3.1 1.1-1.1 3.1-1.1-3.1-3.1-1.1 3.1-1.1z" fill="currentColor" stroke="none"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>', message: '<path d="M4 5h16v11H9l-5 4z"/>', flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
 };

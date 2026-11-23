@@ -13,6 +13,26 @@ non-technical people who need to follow an incident (managers, IT generalists, l
 
 The first person to open a fresh install creates the first account.
 
+## Updates keep your data
+
+Your accounts, workspaces, API keys, cases, pentest notes, assets and settings are stored in the
+workspace database in your user data folder (`stark paths`), not inside the program. Replacing the
+program with a newer version (new binary, `stark update`, pip, a new Docker image on the same
+volume) keeps all of it, so nobody needs to sign up or enter keys again.
+
+- **Automatic safety copy:** when a new version opens the database for the first time, it saves a
+  copy to the `backups` folder next to it before upgrading anything (the last 10 are kept). The
+  console prints where.
+- **Update notice:** when a newer release exists, the sidebar shows *Version X is available*.
+  *Settings → Updates & your data* shows the steps for how this copy was installed, the database
+  location and the last upgrade backup. Turn the check off with `STARK_NO_UPDATE_CHECK=1`.
+- **Full backup / move to a new computer:** `stark backup -o file.zip`, then on the new computer
+  `stark restore file.zip` (with the workspace stopped).
+
+To update a local install: run `stark update` (binary, pip or pipx installs), or `git pull` and
+`python -m pip install -e .` for a git checkout, then start the workspace again. Teams running a
+shared server update that one server; everyone keeps their accounts and cases.
+
 ## Accounts and workspaces
 
 - **Personal workspace**: every account gets one. Only you can see its cases.

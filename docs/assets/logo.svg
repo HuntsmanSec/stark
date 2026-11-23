@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 120" role="img" aria-label="S.T.A.R.K: Security Threat Assessment and Reputation Kit">
+  <defs>
+    <linearGradient id="sk-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d4ed8"/><stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(8 12) scale(1.5)">
+    <rect width="64" height="64" rx="15" fill="url(#sk-bg)"/>
+    <path d="M32 8.5 51 15v14.6c0 11.6-7.7 21-19 25.9-11.3-4.9-19-14.3-19-25.9V15z" fill="none" stroke="#fff" stroke-width="3.2" stroke-linejoin="round"/>
+    <circle cx="32" cy="31" r="11.5" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="2"/>
+    <path d="M32 16.5v4M32 41.5v4M17.5 31h4M42.5 31h4" stroke="#fff" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/>
+    <path d="M32 21.5l2.6 6.9 6.9 2.6-6.9 2.6-2.6 6.9-2.6-6.9-6.9-2.6 6.9-2.6z" fill="#fff"/>
+  </g>
+  <text x="124" y="66" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="46" font-weight="800" letter-spacing="7" fill="#0f172a">S.T.A.R.K</text>
+  <text x="126" y="94" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.5" font-weight="500" letter-spacing="1.2" fill="#475569">Security Threat Assessment and Reputation Kit</text>
+</svg>

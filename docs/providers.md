@@ -23,6 +23,7 @@
 | `pulsedive` | optional | ip, domain, url, hash | 30/min | risk high/critical → malicious, low/medium → suspicious, none → harmless |
 | `ipinfo` | optional | ip | 60/min | Informational (geo/ASN), runs only with `--all` or `-p ipinfo` |
 | `crtsh` | none | domain | 20/min | Informational (certificates/subdomains), runs only with `--all` or `-p crtsh` |
+| `misp` | `misp` + `misp_url` | ip, domain, url, hash, email | - | Your MISP server. IDS attribute in a High/Medium event → malicious, Low/Undefined → suspicious, warninglist or `false-positive` tag → harmless, context only → unknown. See [integrations](integrations.md#misp) |
 
 ## Tuning
 

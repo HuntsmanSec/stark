@@ -7,6 +7,7 @@ from .abuseipdb import AbuseIPDB
 from .base import Provider, ProviderError
 from .hibp import HaveIBeenPwned
 from .intel import OTX, GreyNoise, Pulsedive, RecordedFuture
+from .misp import MISP
 from .network import CrtSh, IPinfo, MXToolbox, Shodan, Talos
 from .sandboxes import AnyRun, HybridAnalysis, JoeSandbox
 from .urlscan import URLScan
@@ -32,6 +33,7 @@ PROVIDERS: List[Type[Provider]] = [
     Pulsedive,
     IPinfo,
     CrtSh,
+    MISP,
 ]
 
 REGISTRY: Dict[str, Type[Provider]] = {p.name: p for p in PROVIDERS}
@@ -54,7 +56,15 @@ def resolve(name: str) -> str:
 
 
 def key_names() -> List[str]:
-    return sorted({p.config_key() for p in PROVIDERS})
+    names = {p.config_key() for p in PROVIDERS}
+    for p in PROVIDERS:
+        names |= set(p.extra_keys)
+    return sorted(names)
 
 
-__all__ = ["PROVIDERS", "REGISTRY", "Provider", "ProviderError", "resolve", "key_names"]
+def providers_for_key(name: str) -> List[Type[Provider]]:
+    """Providers that use ``name`` as their key or as one of their extra settings."""
+    return [p for p in PROVIDERS if p.config_key() == name or name in p.extra_keys]
+
+
+__all__ = ["PROVIDERS", "REGISTRY", "Provider", "ProviderError", "resolve", "key_names", "providers_for_key"]

@@ -53,9 +53,10 @@ class Stark:
                 timeout=self.timeout,
                 options=self.config.provider_options.get(name, {}),
                 settings=s,
+                extra={k: self.config.get_key(k) for k in cls.extra_keys},
             )
             if not p.available:
-                self.skipped[name] = "no API key"
+                self.skipped[name] = "not configured" if cls.extra_keys else "no API key"
                 continue
             self.providers.append(p)
 

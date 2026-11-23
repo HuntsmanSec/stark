@@ -76,6 +76,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
     db = DB(Path(db_path) if db_path else None)
     app.config["DB"] = db
     app.config["ALLOW_SIGNUP"] = allow_signup
+    from ..maintenance import update_checks_enabled
+    app.config["UPDATE_CHECK"] = update_checks_enabled()
     jobs: Dict[int, Dict[str, Any]] = {}
     jobs_lock = threading.Lock()
     login_fails: Dict[str, List[float]] = defaultdict(list)
@@ -188,6 +190,17 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         has_users = db.one("SELECT 1 AS x FROM users LIMIT 1") is not None
         return jsonify({"version": __version__, "allow_signup": app.config["ALLOW_SIGNUP"] or not has_users,
                         "has_users": has_users})
+
+    @app.get("/api/update")
+    @login_required
+    def update_info():
+        """Is a newer release available, and how is this copy updated? Only the public
+        GitHub releases API is contacted; no user or case data is sent."""
+        from .. import maintenance as m
+        info = m.update_status(check=app.config.get("UPDATE_CHECK", True))
+        info["data"] = {"database": str(db.path), "backups": str(db.path.parent / "backups"),
+                        "last_backup": str(db.backup_path) if db.backup_path else None}
+        return jsonify(info)
 
     @app.post("/api/auth/register")
     def register():
@@ -370,20 +383,24 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
     @login_required
     def get_keys(ws_id):
         ws = membership(ws_id)
-        from ..providers import PROVIDERS, key_names
+        from ..providers import key_names, providers_for_key
         stored = {r["name"]: r["value"] for r in db.q("SELECT name, value FROM workspace_keys WHERE workspace_id=?",
                                                        (ws_id,))}
         local = Config()
+        admin = ws["role"] in ("owner", "admin")
         out = []
         for k in key_names():
-            provs = [p for p in PROVIDERS if p.config_key() == k]
+            provs = providers_for_key(k)
+            label = next((p.extra_keys[k] for p in provs if k in p.extra_keys), None)
+            shown = (stored.get(k) if label else mask(stored.get(k))) if admin else ("set" if k in stored else "")
             out.append({
-                "name": k, "providers": [p.display for p in provs],
-                "required": any(p.requires_key for p in provs),
+                "name": k, "providers": [label] if label else [p.display for p in provs],
+                "kind": "setting" if label else "key",
+                "required": label is not None or any(p.requires_key for p in provs),
                 "homepage": provs[0].homepage if provs else "",
-                "description": provs[0].description if provs else "",
-                "set": k in stored, "masked": mask(stored.get(k)) if ws["role"] in ("owner", "admin") else
-                ("set" if k in stored else ""),
+                "description": provs[0].description if provs and not label else
+                ("Address of your MISP server, e.g. https://misp.example.org" if label else ""),
+                "set": k in stored, "masked": shown,
                 "local_fallback": bool(local.get_key(k)) and k not in stored,
             })
         return jsonify({"keys": out, "can_edit": ws["role"] in ("owner", "admin")})
@@ -399,6 +416,10 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
             if name not in valid:
                 continue
             value = (value or "").strip()
+            if value and name.endswith("_url"):
+                if not re.match(r"^https?://[^\s/]+", value):
+                    raise ApiError(400, "The server address must start with https:// (e.g. https://misp.example.org)")
+                value = value.rstrip("/")
             if value:
                 db.x("INSERT OR REPLACE INTO workspace_keys VALUES (?,?,?,?)", (ws_id, name, value, time.time()))
             elif value == "" and body().get("clear_empty"):
@@ -1145,6 +1166,8 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         name = c["ref"]
         if fmt == "stix":
             text, mime, ext = render("stix", reports, tlp=(c["tlp"] or "amber").split("+")[0]), "application/json", "stix.json"
+        elif fmt == "misp":
+            text, mime, ext = misp_event_text(c, reports), "application/json", "misp.json"
         elif fmt in ("csv", "irflow", "vestigex", "hashset", "json", "md"):
             text = render(fmt, reports)
             mime, ext = {"json": ("application/json", "json"), "md": ("text/markdown", "md"),
@@ -1156,6 +1179,54 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
         resp = Response(text, mimetype=mime)
         resp.headers["Content-Disposition"] = f'attachment; filename="{name}.{ext}"'
         return resp
+
+    def case_reports(c: Dict[str, Any]):
+        from ..models import ObservableReport, ProviderResult
+        reports = []
+        for o in c["observables"]:
+            ob = parse_observable(o["value"], forced=ObsType(o["type"]))
+            if ob:
+                reports.append(ObservableReport(ob, [ProviderResult.from_dict(ob, r) for r in o["results"]]))
+        return reports
+
+    def misp_event(c: Dict[str, Any], reports) -> Dict[str, Any]:
+        from ..integrations.misp import build_event
+        info = f"{c['ref']}: {c['title']}"
+        return build_event(reports, info=info, key=f"ws{c['workspace_id']}:{c['ref']}", severity=c.get("severity"),
+                           status=c.get("status"), tlp=(c.get("tlp") or "amber").split("+")[0],
+                           techniques=c.get("techniques"))
+
+    def misp_event_text(c, reports) -> str:
+        return json.dumps(misp_event(c, reports), indent=2)
+
+    def misp_settings(ws_id: int) -> Dict[str, Optional[str]]:
+        stored = {r["name"]: r["value"] for r in db.q(
+            "SELECT name, value FROM workspace_keys WHERE workspace_id=? AND name IN ('misp', 'misp_url')", (ws_id,))}
+        local = Config()
+        return {k: stored.get(k) or local.get_key(k) for k in ("misp", "misp_url")}
+
+    @app.post("/api/cases/<int:case_id>/misp")
+    @login_required
+    def push_misp(case_id):
+        from ..integrations.misp import push_event
+        from ..providers.misp import verify_tls
+        c = full_case(get_case(case_id))
+        cfg = misp_settings(c["workspace_id"])
+        if not cfg["misp"] or not cfg["misp_url"]:
+            raise ApiError(400, "Connect MISP first: add the server address and automation key in Settings.")
+        reports = case_reports(c)
+        event = misp_event(c, reports)
+        if not event["Event"]["Attribute"]:
+            raise ApiError(400, "Nothing to send: the case has no malicious, suspicious or unrated indicators.")
+        try:
+            res = push_event(event, cfg["misp_url"], cfg["misp"],
+                             verify=verify_tls(Config().provider_options.get("misp", {})))
+        except RuntimeError as exc:
+            raise ApiError(502, str(exc)) from None
+        n = len(event["Event"]["Attribute"])
+        db.log(c["workspace_id"], g.user["id"], f"{'sent' if res['created'] else 'updated'} MISP event {res['id']} "
+               f"({n} indicator(s))", case_id)
+        return jsonify({**res, "attributes": n})
 
     # ------------------------------------------------ ephemeral log arranger
     @app.post("/api/arrange")
@@ -1359,20 +1430,31 @@ def create_app(db_path: Optional[str] = None, allow_signup: bool = True, secure_
     def test_key(ws_id):
         ws = membership(ws_id)
         require_admin(ws)
-        from ..providers import PROVIDERS
+        from ..providers import providers_for_key
         from ..providers.base import make_session
         d = body()
-        name = d.get("name")
-        value = (d.get("value") or "").strip() or (db.one("SELECT value FROM workspace_keys WHERE workspace_id=? AND name=?",
-                                                          (ws_id, name)) or {}).get("value") or Config().get_key(name or "")
-        provs = [p for p in PROVIDERS if p.config_key() == name]
+        name = d.get("name") or ""
+
+        def saved(n):
+            return (db.one("SELECT value FROM workspace_keys WHERE workspace_id=? AND name=?", (ws_id, n)) or {}).get(
+                "value") or Config().get_key(n)
+
+        provs = providers_for_key(name)
         if not provs:
             raise ApiError(404, "Unknown source")
+        typed = (d.get("value") or "").strip()
+        main = provs[0].config_key()
+        value = (typed if name == main else "") or saved(main)
+        extra = {k: (typed if name == k else "") or saved(k) for k in provs[0].extra_keys}
+        missing = [provs[0].extra_keys[k] for k, v in extra.items() if not v]
+        if missing:
+            return jsonify({"ok": False, "message": f"Enter the {missing[0].lower()} first"})
         if not value and provs[0].requires_key:
             return jsonify({"ok": False, "message": "No key entered yet"})
         samples = {"ipv4": "8.8.8.8", "domain": "example.com", "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
                    "email": "test@example.com", "url": "https://example.com/"}
-        p = provs[0](api_key=value, session=make_session(), timeout=15, options={"rate_limit": None})
+        opts = {**Config().provider_options.get(provs[0].name, {}), "rate_limit": None}
+        p = provs[0](api_key=value, session=make_session(), timeout=15, options=opts, extra=extra)
         kind = next(k for k in ("ipv4", "domain", "sha256", "url", "email") if any(t.value == k for t in p.supported))
         res = p.lookup(parse_observable(samples[kind]))
         if res.verdict.value == "error":
@@ -1419,7 +1501,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True, 
     app = create_app(db_path=db_path, allow_signup=allow_signup, secure_cookies=secure_cookies)
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0', '::') else host}:{port}/"
     print(f"\n  S.T.A.R.K workspace v{__version__}\n  Open {url} in your browser")
-    print(f"  Data: {app.config['DB'].path}")
+    print(f"  Data: {app.config['DB'].path}  (accounts, API keys and cases; kept across updates)")
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("  ! Listening on the network: put it behind HTTPS (reverse proxy) and use --secure-cookies.")
     print("  Press Ctrl+C to stop.\n")

@@ -1,4 +1,4 @@
-"""Renderers: table, json, jsonl, csv, markdown, stix, irflow, vestigex, hashset."""
+"""Renderers: table, json, jsonl, csv, markdown, stix, misp, irflow, vestigex, hashset."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Sequence
 from . import __version__
 from .models import ObservableReport, Verdict, utcnow
 
-FORMATS = ("table", "json", "jsonl", "csv", "md", "stix", "irflow", "vestigex", "hashset")
+FORMATS = ("table", "json", "jsonl", "csv", "md", "stix", "misp", "irflow", "vestigex", "hashset")
 
 _COLORS = {
     Verdict.MALICIOUS: "\033[1;31m",
@@ -199,6 +199,13 @@ def render_stix(reports, all_indicators=False, tlp="clear", **_):
     return json.dumps(to_bundle(reports, all_indicators=all_indicators, tlp=tlp), indent=2)
 
 
+def render_misp(reports, all_indicators=False, tlp="amber", **_):
+    """MISP event JSON (Events -> Import from -> MISP JSON)."""
+    from .integrations.misp import event_json
+
+    return event_json(reports, all_indicators=all_indicators, tlp=tlp)
+
+
 def render_irflow(reports, **_):
     """IOC list for IRFlow Timeline (Actions -> IOC Matching -> load file).
 
@@ -223,7 +230,7 @@ def render_hashset(reports, **_):
 
 RENDERERS: Dict[str, Callable[..., str]] = {
     "json": render_json, "jsonl": render_jsonl, "csv": render_csv, "md": render_md,
-    "stix": render_stix, "irflow": render_irflow, "vestigex": render_vestigex, "hashset": render_hashset,
+    "stix": render_stix, "misp": render_misp, "irflow": render_irflow, "vestigex": render_vestigex, "hashset": render_hashset,
 }
 
 
